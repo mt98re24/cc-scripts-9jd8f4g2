@@ -12,6 +12,20 @@
       "match": [
         { "type": "url", "value": "https://gossan.onlycable.es:8083/gosbilling/user/incidencias/ma-incidencias.xhtml" }
       ]
-    }  
+    },
+    {
+      "file": "d6f5x8d5.js",
+      "match": [
+        { "type": "url", "value": "https://tca-nem1.onlycable.es/reservations/check/" },
+        { "type": "url", "value": "https://88.148.51.238/reservations/check" },
+        { "type": "url", "value": "https://tag-nem1.onlycable.es/reservations/check/" },
+        { "type": "url", "value": "https://mor-nem1.onlycable.es/reservations/check/" },
+        { "type": "url", "value": "https://nemas.ursotel.es/reservations/check/" },
+        { "type": "url", "value": "https://pue-nem1.onlycable.es/reservations/check/" },
+        { "type": "url", "value": "https://vlc-nem1.onlycable.es/reservations/check/" },
+        { "type": "url", "value": "https://88.148.51.238/reservations/check" },
+        { "type": "url", "value": "https://nov-nem1.onlycable.es/reservations/check/" }
+      ]
+    }
   ]
 }
