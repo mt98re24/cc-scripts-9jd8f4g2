@@ -1,12 +1,3 @@
-/ ==UserScript==
-// @name         Aviso incidencias abiertas Gossan
-// @namespace    gosbilling.crm
-// @version      3.0
-// @description  Muestra incidencias abiertas del cliente con detalles (máx. 2 filas)
-// @match        https://gossan.onlycable.es:8083/gosbilling/user/incidencias/ma-incidencias.xhtml*
-// @grant        none
-// ==/UserScript==
-
 (function() {
     'use strict';
 
