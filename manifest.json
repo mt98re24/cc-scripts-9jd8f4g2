@@ -7,5 +7,13 @@
         { "type": "url", "value": "https://app.wasapi.io/chat" }
       ]
     }
+    {
+      "file": "d5s6s5d.js",
+      "match": [
+        { "type": "url", "value": "https://gossan.onlycable.es:8083/gosbilling/user/incidencias/ma-incidencias.xhtml" }
+      ]
+    }  
+  
+  
   ]
 }
