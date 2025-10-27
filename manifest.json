@@ -1,6 +1,11 @@
 {
-  "file": "x82c9e4a.js",
-  "match": [
-    { "type": "url", "value": "https://app.wasapi.io/chat" }
+  "version": "2025-10-27-01",
+  "scripts": [
+    {
+      "file": "x82c9e4a.js",
+      "match": [
+        { "type": "url", "value": "https://app.wasapi.io/chat" }
+      ]
+    }
   ]
 }
