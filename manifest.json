@@ -1,6 +1,6 @@
 {
-  "version": "2025-10-27-01",
-  "scripts": [
-    "x82c9e4a.js"
+  "file": "x82c9e4a.js",
+  "match": [
+    { "type": "url", "value": "https://app.wasapi.io/chat" }
   ]
 }
