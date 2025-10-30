@@ -1,5 +1,5 @@
 {
-  "version": "2025-10-30-01",
+  "version": "2025-10-30-02",
   "scripts": [
     {
       "file": "x82c9e4a.js",
@@ -31,6 +31,12 @@
       "file": "c8f5d9v6.js",
       "match": [
         { "type": "url", "value": "https://gossan.onlycable.es:8083/gosbilling/user/clientes/servicios-clientes.xhtml?cod_cliente=" }
+      ]
+    },
+    {
+      "file": "9qd58d6.js",
+      "match": [
+        { "type": "url", "value": "https://gossan.onlycable.es:8083/gosbilling/user/incidencias/ma-incidencias.xhtml" }
       ]
     }
   ]
