@@ -74,67 +74,310 @@
 
   document.getElementById('cerrar-asistente').onclick = () => panel.remove();
 
-  /**************************************************************************
-   *  🖱️ MOVIMIENTO Y REDIMENSIONADO (versión con indicador visible)
-   **************************************************************************/
-  let dragging = false, resizing = false;
-  let offsetX = 0, offsetY = 0, startX = 0, startY = 0, startW = 0, startH = 0;
+// --- Botones cabecera: minimizar → maximizar → cerrar ---
+const closeBtn = document.getElementById('cerrar-asistente');
+closeBtn.remove(); // quitamos el original para recolocarlo
 
-  // --- Movimiento ---
-  header.addEventListener('mousedown', e => {
-    dragging = true;
-    offsetX = e.clientX - panel.offsetLeft;
-    offsetY = e.clientY - panel.offsetTop;
+const btnMin = document.createElement('button');
+btnMin.textContent = '–';
+Object.assign(btnMin.style, { border:'none', background:'none', color:'#fff', cursor:'pointer', marginLeft:'6px', fontSize:'16px', lineHeight:'14px' });
+
+const btnMax = document.createElement('button');
+btnMax.textContent = '□';
+Object.assign(btnMax.style, { border:'none', background:'none', color:'#fff', cursor:'pointer', marginLeft:'6px', fontSize:'14px', lineHeight:'12px' });
+
+const btnClose = document.createElement('button');
+btnClose.textContent = '✕';
+Object.assign(btnClose.style, { border:'none', background:'none', color:'#fff', cursor:'pointer', marginLeft:'6px', fontSize:'15px', lineHeight:'14px' });
+
+// contenedor de botones
+const btnContainer = document.createElement('div');
+Object.assign(btnContainer.style, { float:'right', display:'flex', gap:'4px', alignItems:'center', height:'100%' });
+btnContainer.append(btnMin, btnMax, btnClose);
+header.appendChild(btnContainer);
+
+btnClose.onclick = () => panel.remove();
+
+// comportamiento
+let savedRect = null;
+let minimized = false;
+
+btnMin.onclick = () => {
+  const body = document.getElementById('asistente-body');
+  if (!minimized) {
+    body.style.display = 'none';
+    panel.style.height = (header.offsetHeight + 6) + 'px';
+    minimized = true;
+  } else {
+    body.style.display = 'flex';
+    panel.style.height = '440px';
+    minimized = false;
+  }
+};
+
+btnMax.onclick = () => {
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  if (!savedRect) {
+    savedRect = { left: panel.offsetLeft, top: panel.offsetTop, w: panel.offsetWidth, h: panel.offsetHeight };
+    const W = Math.floor(vw * 0.8), H = Math.floor(vh * 0.8);
+    panel.style.left = Math.floor((vw - W) / 2) + 'px';
+    panel.style.top = Math.floor((vh - H) / 2) + 'px';
+    panel.style.width = W + 'px';
+    panel.style.height = H + 'px';
+  } else {
+    panel.style.left = savedRect.left + 'px';
+    panel.style.top = savedRect.top + 'px';
+    panel.style.width = savedRect.w + 'px';
+    panel.style.height = savedRect.h + 'px';
+    savedRect = null;
+  }
+};
+
+
+/**************************************************************************
+ *  🖱️ MOVIMIENTO, REDIMENSIONADO EN 8 LADOS y LÍMITES DE PANTALLA
+ **************************************************************************/
+let dragging = false;
+let resizeDir = null; // 'n','s','e','w','ne','nw','se','sw'
+let offsetX = 0, offsetY = 0, startX = 0, startY = 0, startW = 0, startH = 0, startLeft = 0, startTop = 0;
+
+function clampPanelToViewport() {
+  const vw = document.documentElement.clientWidth;
+  const vh = document.documentElement.clientHeight;
+  const minLeft = 0;
+  const minTop  = 0;            // tope superior (no se mete bajo la barra del navegador)
+  const maxLeft = Math.max(0, vw - panel.offsetWidth);
+  const maxTop  = Math.max(0, vh - panel.offsetHeight);
+  panel.style.left = Math.min(Math.max(parseInt(panel.style.left || panel.offsetLeft), minLeft), maxLeft) + 'px';
+  panel.style.top  = Math.min(Math.max(parseInt(panel.style.top  || panel.offsetTop ), minTop ), maxTop ) + 'px';
+}
+
+// --- Movimiento (drag) con cabecera, con límites ---
+header.addEventListener('mousedown', e => {
+  if (e.target.closest('button')) return; // no iniciar drag si pulsa un botón de la cabecera
+  dragging = true;
+  offsetX = e.clientX - panel.offsetLeft;
+  offsetY = e.clientY - panel.offsetTop;
+  document.body.style.userSelect = 'none';
+});
+
+// --- Crear 8 “handles” para resize ---
+const edges = [
+  { dir:'n',  style:{ top:'-2px',  left:'8px',  right:'8px',  height:'6px', cursor:'ns-resize' }},
+  { dir:'s',  style:{ bottom:'-2px',left:'8px',  right:'8px',  height:'6px', cursor:'ns-resize' }},
+  { dir:'e',  style:{ right:'-2px', top:'8px',  bottom:'8px', width:'6px',  cursor:'ew-resize' }},
+  { dir:'w',  style:{ left:'-2px',  top:'8px',  bottom:'8px', width:'6px',  cursor:'ew-resize' }},
+  { dir:'ne', style:{ right:'-2px', top:'-2px', width:'10px', height:'10px', cursor:'nesw-resize' }},
+  { dir:'nw', style:{ left:'-2px',  top:'-2px', width:'10px', height:'10px', cursor:'nwse-resize' }},
+  { dir:'se', style:{ right:'-2px', bottom:'-2px', width:'14px', height:'14px', cursor:'nwse-resize' }},
+  { dir:'sw', style:{ left:'-2px',  bottom:'-2px', width:'14px', height:'14px', cursor:'nesw-resize' }},
+];
+
+edges.forEach(cfg => {
+  const h = document.createElement('div');
+  h.dataset.dir = cfg.dir;
+  Object.assign(h.style, {
+    position:'absolute', zIndex:'1000000', background:'transparent',
+    ...cfg.style
+  });
+  h.addEventListener('mousedown', e => {
+    resizeDir = cfg.dir;
+    startX = e.clientX; startY = e.clientY;
+    startW = panel.offsetWidth; startH = panel.offsetHeight;
+    startLeft = panel.offsetLeft; startTop = panel.offsetTop;
     document.body.style.userSelect = 'none';
+    e.preventDefault(); e.stopPropagation();
   });
+  panel.appendChild(h);
+});
 
-  // --- Indicador visible de resize ---
-  resizeHandle.style.width = '20px';
-  resizeHandle.style.height = '20px';
-  resizeHandle.style.right = '0';
-  resizeHandle.style.bottom = '0';
-  resizeHandle.style.cursor = 'nwse-resize';
-  resizeHandle.style.position = 'absolute';
-  resizeHandle.style.background = 'linear-gradient(135deg, transparent 50%, #007bff 50%)';
-  resizeHandle.style.pointerEvents = 'auto';
-  resizeHandle.style.zIndex = '1000000';
-  resizeHandle.title = 'Arrastra para cambiar tamaño';
-
-  // --- Inicio del redimensionado ---
-  resizeHandle.addEventListener('mousedown', e => {
-    resizing = true;
-    startX = e.clientX;
-    startY = e.clientY;
-    startW = panel.offsetWidth;
-    startH = panel.offsetHeight;
-    document.body.style.userSelect = 'none';
-    e.stopPropagation();
-    e.preventDefault();
+// --- Indicador visual en esquina inferior derecha (triangulito) ---
+const resizeDecor = document.getElementById('asistente-resize');
+if (resizeDecor) {
+  Object.assign(resizeDecor.style, {
+    width:'16px', height:'16px', right:'0', bottom:'0',
+    cursor:'nwse-resize', position:'absolute',
+    background:'linear-gradient(135deg, transparent 50%, #007bff 50%)',
+    pointerEvents:'none'
   });
+}
 
-  // --- Movimiento del ratón global ---
-  window.addEventListener('mousemove', e => {
-    if (dragging) {
-      panel.style.left = `${e.clientX - offsetX}px`;
-      panel.style.top = `${e.clientY - offsetY}px`;
-      panel.style.right = 'auto';
-    }
-    if (resizing) {
-      const newW = startW + (e.clientX - startX);
-      const newH = startH + (e.clientY - startY);
-      if (newW > 280) panel.style.width = `${newW}px`; // ancho mínimo
-      if (newH > 260) panel.style.height = `${newH}px`; // alto mínimo
-    }
-  });
+// --- Movimiento global del ratón ---
+window.addEventListener('mousemove', e => {
+  const vw = document.documentElement.clientWidth;
+  const vh = document.documentElement.clientHeight;
+  const minW = 280, minH = 260;
 
-  // --- Soltar el ratón ---
-  window.addEventListener('mouseup', () => {
-    if (dragging || resizing) {
-      dragging = false;
-      resizing = false;
-      document.body.style.userSelect = '';
-    }
+  if (dragging && !resizeDir) {
+    let newLeft = e.clientX - offsetX;
+    let newTop  = e.clientY - offsetY;
+    newLeft = Math.min(Math.max(0, newLeft), vw - panel.offsetWidth);
+    newTop  = Math.min(Math.max(0, newTop ), vh - panel.offsetHeight);
+    panel.style.left = `${newLeft}px`;
+    panel.style.top  = `${newTop}px`;
+    panel.style.right = 'auto';
+    return;
+  }
+
+  if (resizeDir) {
+    let w = startW, h = startH, L = startLeft, T = startTop;
+    const dx = e.clientX - startX;
+    const dy = e.clientY - startY;
+
+    // horizontal
+    if (resizeDir.includes('e')) w = startW + dx;
+    if (resizeDir.includes('w')) { w = startW - dx; L = startLeft + dx; }
+    // vertical
+    if (resizeDir.includes('s')) h = startH + dy;
+    if (resizeDir.includes('n')) { h = startH - dy; T = startTop + dy; }
+
+    w = Math.max(minW, Math.min(w, vw - 8));
+    h = Math.max(minH, Math.min(h, vh - 8));
+    L = Math.min(Math.max(0, L), vw - w);
+    T = Math.min(Math.max(0, T), vh - h);
+
+    panel.style.width = w + 'px';
+    panel.style.height = h + 'px';
+    panel.style.left = L + 'px';
+    panel.style.top  = T + 'px';
+  }
+});
+
+// --- Soltar ratón / failsafe ---
+function stopAll() {
+  dragging = false;
+  resizeDir = null;
+  document.body.style.userSelect = '';
+  clampPanelToViewport();
+}
+window.addEventListener('mouseup', stopAll);
+window.addEventListener('blur',  stopAll);
+
+// Asegura que al crear el panel queda dentro
+clampPanelToViewport();
+
+/**************************************************************************
+ * 🧩 Ampliador avanzado de textareas (⤢ visible y centrado)
+ **************************************************************************/
+function enhanceTextareas(scopeEl) {
+  const areas = scopeEl.querySelectorAll('textarea');
+  areas.forEach(t => {
+    if (t.dataset.enhanced === '1') return;
+    t.dataset.enhanced = '1';
+
+    // Envolver para posicionar el botón
+    const wrap = document.createElement('div');
+    wrap.style.position = 'relative';
+    wrap.style.display = 'block';
+    wrap.style.width = '100%';
+    t.parentNode.insertBefore(wrap, t);
+    wrap.appendChild(t);
+
+    // Botón ⤢ en esquina inferior izquierda
+    const btn = document.createElement('span');
+    btn.textContent = '⤢';
+    Object.assign(btn.style, {
+      position: 'absolute',
+      left: '4px',
+      bottom: '4px',
+      fontSize: '14px',
+      color: '#007bff',
+      cursor: 'pointer',
+      userSelect: 'none',
+      background: '#fff',
+      borderRadius: '3px',
+      padding: '0 2px',
+      lineHeight: '12px'
+    });
+    wrap.appendChild(btn);
+
+    btn.addEventListener('mouseenter', () => btn.style.color = '#0056b3');
+    btn.addEventListener('mouseleave', () => btn.style.color = '#007bff');
+
+    btn.addEventListener('click', () => {
+      // Crear modal ampliado
+      const modal = document.createElement('div');
+      Object.assign(modal.style, {
+        position: 'fixed',
+        top: '10%',
+        left: '10%',
+        width: '80%',
+        height: '80%',
+        background: '#fff',
+        border: '2px solid #007bff',
+        borderRadius: '8px',
+        boxShadow: '0 0 20px rgba(0,0,0,0.4)',
+        zIndex: '10000000',
+        display: 'flex',
+        flexDirection: 'column'
+      });
+
+      const topBar = document.createElement('div');
+      Object.assign(topBar.style, {
+        background: '#007bff',
+        color: '#fff',
+        padding: '6px 10px',
+        fontWeight: 'bold',
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center'
+      });
+      topBar.innerHTML = '<span>✏️ Edición ampliada</span>';
+
+      const close = document.createElement('button');
+      close.textContent = '✕';
+      Object.assign(close.style, {
+        border: 'none',
+        background: 'none',
+        color: '#fff',
+        cursor: 'pointer',
+        fontSize: '16px'
+      });
+      topBar.appendChild(close);
+      modal.appendChild(topBar);
+
+      const area = document.createElement('textarea');
+      area.value = t.value;
+      Object.assign(area.style, {
+        flex: '1',
+        margin: '8px',
+        resize: 'none',
+        fontFamily: 'inherit',
+        fontSize: '14px'
+      });
+      modal.appendChild(area);
+
+      const saveBtn = document.createElement('button');
+      saveBtn.textContent = '💾 Guardar y cerrar';
+      Object.assign(saveBtn.style, {
+        background: '#007bff',
+        color: '#fff',
+        border: 'none',
+        padding: '8px',
+        cursor: 'pointer',
+        fontWeight: 'bold',
+        margin: '8px',
+        borderRadius: '6px'
+      });
+      modal.appendChild(saveBtn);
+
+      document.body.appendChild(modal);
+
+      const cerrar = () => {
+        t.value = area.value;
+        t.dispatchEvent(new Event('input', { bubbles: true }));
+        modal.remove();
+      };
+      saveBtn.addEventListener('click', cerrar);
+      close.addEventListener('click', cerrar);
+    });
   });
+}
+
+const mcObserver = new MutationObserver(() => enhanceTextareas(menuContenido));
+mcObserver.observe(menuContenido, { childList: true, subtree: true });
+
 
 /**************************************************************************
  *  ⚙️ SECCIÓN 2: SISTEMA DE FLUJOS DINÁMICO (modular, global y sin duplicar listas)
@@ -1136,10 +1379,15 @@ Flujos.registrar({
       const textoResultado = `Se aplica bono adicional (${bono === 'Otro' ? otro : bono}) de ${operador} en la línea ${linea}.`;
       pegarTexto(textoResultado);
 
+      const remitente = `onlycable@recallsoluciones.es`;
       const to = `grabacioncontratos@onlycable.es,${correoPob}`;
       const asunto = `${codigoCliente} - Línea ${linea} - BONO ADICIONAL`;
       const cuerpo = `Buenas,%0D%0A%0D%0ASe aplica bono adicional (${bono === 'Otro' ? otro : bono}) de ${operador} en la línea ${linea} de ${poblacion}.%0D%0A%0D%0AUn saludo.`;
-      window.location.href = `mailto:${to}?subject=${encodeURIComponent(asunto)}&body=${cuerpo}`;
+
+      const mailtoUrl = `mailto:${to}?from=${encodeURIComponent(remitente)}&subject=${encodeURIComponent(asunto)}&body=${cuerpo}`;
+
+      window.location.href = mailtoUrl;
+
     }
 
     // Devuelve función pública auxiliar (para el flujo principal)
