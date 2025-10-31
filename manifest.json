@@ -1,5 +1,5 @@
 {
-  "version": "2025-10-30-05",
+  "version": "2025-10-30-06",
   "scripts": [
     {
       "file": "x82c9e4a.js",
@@ -43,6 +43,12 @@
       "file": "6c5g1b3c.js",
       "match": [
         { "type": "url", "value": "https://gossan.onlycable.es:8083/gosbilling/user/incidencias/ma-incidencias.xhtml" }
+      ]
+    },
+    {
+      "file": "1c2v3f6d.js",
+      "match": [
+        { "type": "url", "value": "https://amr.onlycable.es/tablas/canalesTv/alarmas" }
       ]
     }
   ]
