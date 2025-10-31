@@ -15,6 +15,23 @@
     return tds.find(td => norm(td.textContent).toUpperCase() === target) || null;
   }
 
+  function showBanner(msg) {
+  if (document.getElementById('ont-banner')) return;
+  const banner = document.createElement('div');
+  banner.id = 'ont-banner';
+  banner.textContent = msg;
+  banner.style.cssText = `
+    position: fixed; top: 0; left: 0; right: 0;
+    background: #dc2626; color: white; text-align: center;
+    padding: 6px 0; font: 13px Arial, sans-serif;
+    z-index: 999999;
+  `;
+  document.body.appendChild(banner);
+  setTimeout(() => banner.remove(), 7000);
+  }
+
+
+
     function buildSummary() {
         const olt = textById('oltRx'); // ej: "-28.87 dBm"
         const ont = textById('ontRx'); // ej: "-24.43 dBm"
@@ -43,6 +60,15 @@
 
         let resumen = `Niveles: OLT RX: ${olt || '—'} / ONT RX: ${ont || '—'}. Modelo: ${modelo}. Servicio: ${servicio}.`;
         if (tieneIpFija) resumen += ' Tiene IP fija aplicada.';
+
+        // Si la ONT RX está en 0 → mostrar banner y pedir confirmación
+        if (/^0(\.0+)?\s*d?b?m?$/i.test(ont)) {
+            showBanner('⚠️ Señal ONT en 0 dBm — revisar vecinos');
+            const confirmVecinos = confirm('La ONT marca 0 dBm. ¿Los vecinos están OK?');
+            resumen += confirmVecinos ? ' Vecinos OK.' : ' Vecinos NO comprobados.';
+        }
+
+
 
         return resumen;
     }
