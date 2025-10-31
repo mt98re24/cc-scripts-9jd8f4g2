@@ -250,8 +250,6 @@
         }).replace(',', '');
 
         const lines = [];
-        lines.push(`**RESUMEN DE CANALES — ${fecha}**`);
-
         const fallen = fallenAgg.filter(it => selected.has(canonicalName(it.canal)));
         const ccerr  = ccerrAgg.filter(it => selected.has(canonicalName(it.canal)));
 
