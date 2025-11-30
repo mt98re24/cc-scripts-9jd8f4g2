@@ -4162,6 +4162,88 @@ Flujos.registrar({
   }
 });
 
+ /**************************************************************************
+ * 🧭 FLUJO: INTERESADO BALIZA
+ **************************************************************************/
+
+Flujos.registrar({
+  id: 'interesadoBaliza',
+  nombre: '🧭 Interesado baliza',
+  tipos: ['administrativo'],
+  categorias: ['nueva'],
+  render: (contenedor, pegarTexto) => {
+    contenedor.innerHTML = `
+      <h3>🧭 Interesado baliza</h3>
+
+      <label><b>Número de balizas:</b></label><br>
+      <input id="numeroBalizas" type="text" placeholder="Ej: 1, 2, 3..." style="width:100%;margin-bottom:10px;">
+
+      <label><b>Teléfono de contacto:</b></label><br>
+      <input id="telefonoBaliza" type="text" placeholder="Ej: 612345678" style="width:100%;margin-bottom:10px;">
+
+      <button id="generarBalizaBtn" style="
+        width:100%;
+        background:#007bff;
+        color:white;
+        border:none;
+        padding:8px;
+        border-radius:6px;
+        cursor:pointer;
+      ">📝 Generar resultado</button>
+    `;
+
+    const numeroBalizas = contenedor.querySelector('#numeroBalizas');
+    const telefono = contenedor.querySelector('#telefonoBaliza');
+    const btn = contenedor.querySelector('#generarBalizaBtn');
+
+    btn.addEventListener('click', () => {
+      const num = numeroBalizas.value.trim();
+      const tel = telefono.value.trim();
+
+      if (!num) {
+        alert('⚠️ Debes indicar el número de balizas.');
+        return;
+      }
+
+      if (!tel) {
+        alert('⚠️ Debes indicar un teléfono de contacto.');
+        return;
+      }
+
+      // 🧾 Resultado en una sola línea
+      let texto = `Interesado en ${num} baliza(s). TC: ${tel}.`;
+
+      pegarTexto(texto.trim());
+
+      // ✅ Autoasignación a "BALIZA DGT"
+      try {
+        const panel = document.querySelector('div[id*="multipleAsignaciones_panel"]');
+        if (!panel) throw new Error('No se encontró el panel de asignaciones.');
+
+        const labels = panel.querySelectorAll('label');
+        let encontrado = false;
+
+        labels.forEach(label => {
+          if (label.textContent.trim().toUpperCase() === 'BALIZA DGT') {
+            const forAttr = label.getAttribute('for');
+            const input = document.getElementById(forAttr);
+            if (input && !input.checked) {
+              label.click();
+              console.log('[Asistente RECALL] ✅ Asignación marcada: BALIZA DGT');
+            }
+            encontrado = true;
+          }
+        });
+
+        if (!encontrado) {
+          console.warn('[Asistente RECALL] ⚠️ No se encontró la asignación "BALIZA DGT" en el panel.');
+        }
+      } catch (e) {
+        console.error('[Asistente RECALL] ❌ Error al marcar la asignación "BALIZA DGT":', e);
+      }
+    });
+  }
+});
 
 /**************************************************************************
 FORZAR RENDERIZADO
