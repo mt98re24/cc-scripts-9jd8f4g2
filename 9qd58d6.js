@@ -1321,7 +1321,7 @@ Flujos.registrar({
 
 /**************************************************************************
  * 📶 FLUJO: BONO ADICIONAL (modo pasivo para subflujos)
- **************************************************************************/
+**************************************************************************/
 
 Flujos.registrar({
   id: 'bono',
@@ -1378,13 +1378,13 @@ Flujos.registrar({
       }
     `;
 
-    const operadorSel = contenedor.querySelector('#operadorBono');
-    const bonosBox = contenedor.querySelector('#bonosBox');
-    const bonoSelect = contenedor.querySelector('#bonoSelect');
-    const otroBonoBox = contenedor.querySelector('#otroBonoBox');
+    const operadorSel   = contenedor.querySelector('#operadorBono');
+    const bonosBox      = contenedor.querySelector('#bonosBox');
+    const bonoSelect    = contenedor.querySelector('#bonoSelect');
+    const otroBonoBox   = contenedor.querySelector('#otroBonoBox');
     const otroBonoInput = contenedor.querySelector('#otroBonoInput');
-    const poblacionSel = contenedor.querySelector('#poblacionSelect');
-    const btn = contenedor.querySelector('#generarBonoBtn');
+    const poblacionSel  = contenedor.querySelector('#poblacionSelect');
+    const btn           = contenedor.querySelector('#generarBonoBtn');
 
     const bonosPorOperador = {
       'Lemonvil': [
@@ -1398,15 +1398,15 @@ Flujos.registrar({
         'Compartido 10GB (10€)', 'Otro'
       ],
       'Aire': ['3GB (10€)', '10GB (19,90€)', 'Otro'],
-      'PTV': ['1GB (5€)', '10GB (19,90€)', 'Otro']
+      'PTV':  ['1GB (5€)', '10GB (19,90€)', 'Otro']
     };
 
     operadorSel.addEventListener('change', () => {
-      const operador = operadorSel.value;
-      bonosBox.style.display = operador ? 'block' : 'none';
-      bonoSelect.innerHTML = '';
-      if (operador && bonosPorOperador[operador]) {
-        bonosPorOperador[operador].forEach(b => {
+      const op = operadorSel.value;
+      bonosBox.style.display = op ? 'block' : 'none';
+      bonoSelect.innerHTML   = '';
+      if (op && bonosPorOperador[op]) {
+        bonosPorOperador[op].forEach(b => {
           const opt = document.createElement('option');
           opt.textContent = b;
           bonoSelect.appendChild(opt);
@@ -1419,15 +1419,92 @@ Flujos.registrar({
       otroBonoBox.style.display = bonoSelect.value === 'Otro' ? 'block' : 'none';
     });
 
-    // ✅ función pública: obtener datos del formulario
+    /**************************************************************************
+     * FUNCIONES INTERNAS
+     **************************************************************************/
+
+    function _getLinea() {
+      let linea = '(sin línea)';
+      try {
+        const texto = obtenerTextoAbonado()?.trim() || '';
+        if (texto && texto !== 'ES' && !texto.toLowerCase().includes('seleccione')) linea = texto;
+      } catch {}
+      return linea;
+    }
+
+    function _enviarCorreo({ operador, bono, otro, poblacion }) {
+      const correosPoblacion = {
+        'AGUILAS':    'atencionalcliente@teleaguilas.es',
+        'ARCOS':      'atencionalcliente@arcotel.es',
+        'CARTAGENA':  'atencionalcliente@telecartagena.es',
+        'MARCHENA':   'atencionalcliente@martiatel.es',
+        'MOLINA':     'atencionalcliente@molinafibra.es',
+        'MORON':      'atencionalcliente@canal4moron.es',
+        'OSUNA':      'atencionalcliente@ursotel.es',
+        'PUEBLA':     'atencionalcliente@pueblatel.es',
+        'VALENCIA':   'atencionalcliente@valenciacable.es',
+        'VILLANUEVA': 'atencionalcliente@novatel.es'
+      };
+
+      const correoPob     = correosPoblacion[poblacion];
+      const linea         = _getLinea();
+      const bonoFinal     = bono === 'Otro' ? otro : bono;
+      const clienteLink   = document.querySelector('a[id*="textCliente"]');
+      const codCliente    = clienteLink ? clienteLink.textContent.trim().split('-')[0].trim() : '(sin código)';
+
+      const to     = `grabacioncontratos@onlycable.es,${correoPob}`;
+      const asunto = `${codCliente} - Línea ${linea} - BONO ADICIONAL`;
+      const cuerpo = `Buenas,%0D%0A%0D%0ASe aplica bono adicional (${bonoFinal}) de ${operador} en la línea ${linea} de ${poblacion}.%0D%0A%0D%0AUn saludo.`;
+
+      window.location.href = `mailto:${to}?from=${encodeURIComponent('onlycable@recallsoluciones.es')}&subject=${encodeURIComponent(asunto)}&body=${cuerpo}`;
+    }
+
+    function _generarYEnviar(datos) {
+      const bonoFinal = datos.bono === 'Otro' ? datos.otro : datos.bono;
+      const linea     = _getLinea();
+      pegarTexto(`Se aplica bono adicional (${bonoFinal}) de ${datos.operador} en la línea ${linea}.`);
+      _enviarCorreo(datos);
+    }
+
+    /**************************************************************************
+     * MÉTODOS PÚBLICOS
+     **************************************************************************/
+
+    // Obtener datos del formulario
     contenedor.getDatosBono = () => ({
-      operador: operadorSel.value,
-      bono: bonoSelect.value,
-      otro: otroBonoInput.value.trim(),
+      operador:  operadorSel.value,
+      bono:      bonoSelect.value,
+      otro:      otroBonoInput.value.trim(),
       poblacion: poblacionSel.value
     });
 
-    // Si se muestra como flujo independiente
+    // Solo el fragmento de texto (para insertar en la línea de la incidencia)
+    contenedor.getTextoBono = () => {
+      const datos = contenedor.getDatosBono();
+      if (!datos.operador || !datos.bono || !datos.poblacion) return null;
+      const bonoFinal = datos.bono === 'Otro' ? datos.otro : datos.bono;
+      return `Datos agotados. Se aplica bono adicional (${bonoFinal}) de ${datos.operador} en la línea ${_getLinea()}.`;
+    };
+
+    // Solo el correo (sin pegarTexto)
+    contenedor.enviarCorreoBono = () => {
+      const datos = contenedor.getDatosBono();
+      if (!datos.operador || !datos.bono || !datos.poblacion) return;
+      _enviarCorreo(datos);
+    };
+
+    // Usado cuando el bono funciona como flujo independiente
+    contenedor.generarYEnviarBono = () => {
+      const datos = contenedor.getDatosBono();
+      if (!datos.operador || !datos.bono || !datos.poblacion) {
+        alert('⚠️ Debes completar operador, bono y población antes de generar el resultado.');
+        return false;
+      }
+      _generarYEnviar(datos);
+      return true;
+    };
+
+    // Botón visible solo en modo independiente
     if (!esSubflujo && btn) {
       btn.addEventListener('click', () => {
         const datos = contenedor.getDatosBono();
@@ -1435,63 +1512,11 @@ Flujos.registrar({
           alert('⚠️ Debes seleccionar operador, bono y población.');
           return;
         }
-        generarYEnviar(datos, pegarTexto);
+        _generarYEnviar(datos);
       });
     }
-
-    // --- Función auxiliar interna ---
-    function generarYEnviar({ operador, bono, otro, poblacion }, pegarTexto) {
-      const correosPoblacion = {
-        'AGUILAS': 'atencionalcliente@teleaguilas.es',
-        'ARCOS': 'atencionalcliente@arcotel.es',
-        'CARTAGENA': 'atencionalcliente@telecartagena.es',
-        'MARCHENA': 'atencionalcliente@martiatel.es',
-        'MOLINA': 'atencionalcliente@molinafibra.es',
-        'MORON': 'atencionalcliente@canal4moron.es',
-        'OSUNA': 'atencionalcliente@ursotel.es',
-        'PUEBLA': 'atencionalcliente@pueblatel.es',
-        'VALENCIA': 'atencionalcliente@valenciacable.es',
-        'VILLANUEVA': 'atencionalcliente@novatel.es'
-      };
-
-      const correoPob = correosPoblacion[poblacion];
-      let linea = '(sin línea)';
-      try {
-        const texto = obtenerTextoAbonado()?.trim() || '';
-        if (texto && texto !== 'ES' && !texto.toLowerCase().includes('seleccione')) linea = texto;
-      } catch {}
-
-      const clienteLink = document.querySelector('a[id*="textCliente"]');
-      const codigoCliente = clienteLink ? clienteLink.textContent.trim().split('-')[0].trim() : '(sin código)';
-
-      const textoResultado = `Se aplica bono adicional (${bono === 'Otro' ? otro : bono}) de ${operador} en la línea ${linea}.`;
-      pegarTexto(textoResultado);
-
-      const remitente = `onlycable@recallsoluciones.es`;
-      const to = `grabaciondecontratos@onlycable.es,${correoPob}`;
-      const asunto = `${codigoCliente} - Línea ${linea} - BONO ADICIONAL`;
-      const cuerpo = `Buenas,%0D%0A%0D%0ASe aplica bono adicional (${bono === 'Otro' ? otro : bono}) de ${operador} en la línea ${linea} de ${poblacion}.%0D%0A%0D%0AUn saludo.`;
-
-      const mailtoUrl = `mailto:${to}?from=${encodeURIComponent(remitente)}&subject=${encodeURIComponent(asunto)}&body=${cuerpo}`;
-
-      window.location.href = mailtoUrl;
-
-    }
-
-    // Devuelve función pública auxiliar (para el flujo principal)
-    contenedor.generarYEnviarBono = () => {
-      const datos = contenedor.getDatosBono();
-      if (!datos.operador || !datos.bono || !datos.poblacion) {
-        alert('⚠️ Debes completar operador, bono y población antes de generar el resultado.');
-        return false;
-      }
-      generarYEnviar(datos, pegarTexto);
-      return true;
-    };
   }
 });
-
-
 
 /**************************************************************************
  * 📊 FLUJO: CONSUMO DE DATOS (ajuste: texto coherente con bono + tarifa)
@@ -2532,11 +2557,24 @@ Flujos.registrar({
       <label><b>Tipo de gestión:</b></label><br>
       <select id="tipoGestion" style="width:100%;margin-bottom:10px;">
         <option value="">Seleccione...</option>
-        <option value="inicio">Inicio gestión</option>
-        <option value="seguimiento">Seguimiento</option>
+        <option value="nueva">🆕 Nueva incidencia</option>
+        <option value="actualizacion">🔄 Actualización</option>
       </select>
 
-      <div id="bloqueInicioGestion" style="display:none;">
+      <!-- ══════════════════════════════════════════
+           NUEVA INCIDENCIA
+      ══════════════════════════════════════════ -->
+      <div id="bloqueNueva" style="display:none;">
+
+        <label style="display:flex;align-items:center;gap:8px;margin-bottom:8px;cursor:pointer;">
+          <input type="checkbox" id="esHija">
+          <b>Incidencia hija</b>
+        </label>
+        <div id="bloqueHija" style="display:none;margin-bottom:10px;">
+          <label>Nº incidencia madre:</label><br>
+          <input type="text" id="incMadre" placeholder="Ej: INC-00123" style="width:100%;box-sizing:border-box;">
+        </div>
+
         <label><b>Operador:</b></label><br>
         <select id="operador" style="width:100%;margin-bottom:10px;">
           <option value="">Seleccione operador</option>
@@ -2546,168 +2584,713 @@ Flujos.registrar({
           <option>PTV</option>
         </select>
 
-        <label><b>Tipo de incidencia:</b></label><br>
-        <select id="tipoIncidencia" style="width:100%;margin-bottom:10px;">
-          <option value="">Seleccione tipo</option>
+        <label><b>Motivo incidencia:</b></label><br>
+        <select id="motivoInc" style="width:100%;margin-bottom:10px;">
+          <option value="">Seleccione motivo</option>
           <optgroup label="España">
             <option>Sin servicio (voz/datos)</option>
             <option>Sin voz</option>
+            <option>Problema llamadas entrantes</option>
+            <option>Problema llamadas salientes</option>
             <option>Sin datos móviles</option>
-            <option>Sin llamadas salientes</option>
             <option>Lentitud datos móviles</option>
-            <option>Problemas de cobertura</option>
+            <option>Cobertura</option>
+            <option>Otro</option>
           </optgroup>
           <optgroup label="Roaming">
             <option>Sin servicio (voz/datos)</option>
             <option>Sin voz</option>
+            <option>Problema llamadas entrantes</option>
+            <option>Problema llamadas salientes</option>
             <option>Sin datos móviles</option>
-            <option>Sin llamadas salientes</option>
+            <option>Lentitud datos móviles</option>
+            <option>Cobertura</option>
+            <option>Otro</option>
           </optgroup>
         </select>
 
-        <div id="bloqueDatosAgotados" style="display:none;margin-bottom:10px;">
-          <label><input type="checkbox" id="datosAgotados"> Datos agotados (abrir flujo bono adicional)</label>
-          <div id="subBonoBox" style="display:none;margin-top:8px;border:1px solid #ccc;border-radius:6px;padding:6px;"></div>
+        <!-- Datos agotados Nueva -->
+        <div id="bloqueDatosAgotadosNueva" style="display:none;margin-bottom:10px;padding:8px;border:1px solid #d0e8d0;border-radius:6px;background:#f4fff4;">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:8px;">
+            <input type="checkbox" id="datosAgotadosNueva"> <b>Datos agotados</b>
+          </label>
+          <div id="preguntasBonoNueva" style="display:none;">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+              <label style="flex:1;">¿Interesado en bono adicional?</label>
+              <select id="interesBonoNueva" style="width:80px;">
+                <option value="">—</option>
+                <option value="si">Sí</option>
+                <option value="no">No</option>
+              </select>
+            </div>
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+              <label style="flex:1;">¿Interesado en ampliar tarifa?</label>
+              <select id="interesTarifaNueva" style="width:80px;">
+                <option value="">—</option>
+                <option value="si">Sí</option>
+                <option value="no">No</option>
+              </select>
+            </div>
+            <div id="subBonoBoxNueva" style="display:none;margin-top:8px;border:1px solid #ccc;border-radius:6px;padding:6px;background:#fff;"></div>
+          </div>
         </div>
+
+        <label><b>Información adicional <span style="font-weight:normal;">(opcional)</span>:</b></label><br>
+        <textarea id="infoAdicional" rows="2" style="width:100%;margin-bottom:10px;box-sizing:border-box;"></textarea>
+
+        <label><b>Pruebas realizadas <span style="font-weight:normal;">(opcional)</span>:</b></label><br>
+        <textarea id="pruebasRealizadas" rows="2" style="width:100%;margin-bottom:10px;box-sizing:border-box;"></textarea>
+
+        <label><b>Estado:</b></label><br>
+        <select id="estadoNueva" style="width:100%;margin-bottom:8px;">
+          <option value="">Seleccione estado</option>
+          <option value="pte_cliente">PTE CLIENTE</option>
+          <option value="pte_proveedor">PTE PROVEEDOR</option>
+          <option value="pte_atc">PTE ATC</option>
+          <option value="pte_interno">PTE INTERNO</option>
+          <option value="resuelta">RESUELTA</option>
+        </select>
+
+        <!-- Sub PTE CLIENTE Nueva -->
+        <div id="subClienteNueva" style="display:none;margin-bottom:10px;padding:8px;border:1px solid #cce0ff;border-radius:6px;background:#f0f7ff;">
+          <label><b>Situación:</b></label><br>
+          <select id="subEstClienteNueva" style="width:100%;margin-bottom:8px;">
+            <option value="">Seleccione...</option>
+            <option value="avisara">Avisará cuando pueda</option>
+            <option value="no_localizado">No localizado</option>
+            <option value="citado">Citado</option>
+          </select>
+          <div id="bloqueAvisaraNueva" style="display:none;">
+            <label><b>Pruebas:</b></label><br>
+            <select id="pruebasIndNueva" style="width:100%;margin-bottom:4px;">
+              <option value="">Seleccione...</option>
+              <option value="indicadas">Pruebas indicadas</option>
+              <option value="no_indicadas">Pruebas no indicadas</option>
+            </select>
+          </div>
+          <div id="bloqueNoLocNueva" style="display:none;">
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+              <input type="checkbox" id="waEnviadoNueva"> Se envía WhatsApp
+            </label>
+          </div>
+        </div>
+
+        <!-- Sub PTE PROVEEDOR Nueva -->
+        <div id="subProveedorNueva" style="display:none;margin-bottom:10px;padding:8px;border:1px solid #ffd6a5;border-radius:6px;background:#fff8ee;">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:6px;">
+            <input type="checkbox" id="seReclamaNueva"> Se reclama
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:6px;">
+            <input type="checkbox" id="escN2Nueva"> Escalado a N2 operador
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:8px;">
+            <input type="checkbox" id="escCoordNueva"> Escalado a coordinador
+          </label>
+          <label><b>Nº ticket operador:</b></label><br>
+          <input type="text" id="ticketProveedorNueva" placeholder="Ej: TK-98765" style="width:100%;box-sizing:border-box;">
+        </div>
+
+        <div id="bloquePrioridadNueva" style="display:none;margin-bottom:12px;">
+          <label><b>Prioridad:</b></label><br>
+          <select id="prioridadNueva" style="width:100%;">
+            <option value="">Seleccione prioridad</option>
+            <option value="extrema">🔴 Extrema</option>
+            <option value="alta">🟠 Alta</option>
+            <option value="baja">🟢 Baja</option>
+          </select>
+        </div>
+
+        <button id="btnGenerarNueva" style="
+          width:100%;background:#007bff;color:white;
+          border:none;padding:8px;border-radius:6px;cursor:pointer;
+          transition:background 0.3s;">
+          📝 Generar resultado
+        </button>
       </div>
 
-      <label><b>Información adicional (opcional):</b></label><br>
-      <textarea id="infoAdicional" rows="2" style="width:100%;margin-bottom:10px;"></textarea>
+      <!-- ══════════════════════════════════════════
+           ACTUALIZACIÓN
+      ══════════════════════════════════════════ -->
+      <div id="bloqueActualizacion" style="display:none;">
 
-      <label><b>Acciones realizadas (opcional):</b></label><br>
-      <textarea id="acciones" rows="2" style="width:100%;margin-bottom:10px;"></textarea>
+        <!-- Cambiar motivo -->
+        <label style="display:flex;align-items:center;gap:8px;margin-bottom:8px;cursor:pointer;">
+          <input type="checkbox" id="cambiarMotivo"> <b>Cambiar motivo de incidencia</b>
+        </label>
+        <div id="bloqueNuevoMotivo" style="display:none;margin-bottom:10px;">
+          <select id="motivoAct" style="width:100%;margin-bottom:10px;">
+            <option value="">Seleccione motivo</option>
+            <optgroup label="España">
+              <option>Sin servicio (voz/datos)</option>
+              <option>Sin voz</option>
+              <option>Problema llamadas entrantes</option>
+              <option>Problema llamadas salientes</option>
+              <option>Sin datos móviles</option>
+              <option>Lentitud datos móviles</option>
+              <option>Cobertura</option>
+              <option>Otro</option>
+            </optgroup>
+            <optgroup label="Roaming">
+              <option>Sin servicio (voz/datos)</option>
+              <option>Sin voz</option>
+              <option>Problema llamadas entrantes</option>
+              <option>Problema llamadas salientes</option>
+              <option>Sin datos móviles</option>
+              <option>Lentitud datos móviles</option>
+              <option>Cobertura</option>
+              <option>Otro</option>
+            </optgroup>
+          </select>
 
-      <label><b>¿Se soluciona la incidencia?</b></label><br>
-      <select id="resolucion" style="width:100%;margin-bottom:10px;">
-        <option value="">Seleccione...</option>
-        <option>✅ Sí</option>
-        <option>🕓 Pendiente comprobación cliente</option>
-        <option>❌ No, se abre ticket</option>
-        <option>➡️ Se deriva a ATC</option>
-      </select>
+          <!-- Datos agotados Actualización -->
+          <div id="bloqueDatosAgotadosAct" style="display:none;margin-bottom:10px;padding:8px;border:1px solid #d0e8d0;border-radius:6px;background:#f4fff4;">
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:8px;">
+              <input type="checkbox" id="datosAgotadosAct"> <b>Datos agotados</b>
+            </label>
+            <div id="preguntasBonoAct" style="display:none;">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+                <label style="flex:1;">¿Interesado en bono adicional?</label>
+                <select id="interesBonoAct" style="width:80px;">
+                  <option value="">—</option>
+                  <option value="si">Sí</option>
+                  <option value="no">No</option>
+                </select>
+              </div>
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+                <label style="flex:1;">¿Interesado en ampliar tarifa?</label>
+                <select id="interesTarifaAct" style="width:80px;">
+                  <option value="">—</option>
+                  <option value="si">Sí</option>
+                  <option value="no">No</option>
+                </select>
+              </div>
+              <div id="subBonoBoxAct" style="display:none;margin-top:8px;border:1px solid #ccc;border-radius:6px;padding:6px;background:#fff;"></div>
+            </div>
+          </div>
+        </div>
 
-      <div id="bloqueTicket" style="display:none;margin-bottom:10px;">
-        <label><b>Nº ticket:</b></label><br>
-        <input id="numeroTicket" type="text" placeholder="Ej: INC123456" style="width:100%;">
+        <!-- Campos opcionales con checkbox -->
+        <div style="margin-bottom:10px;">
+
+          <!-- Información adicional -->
+          <label style="display:flex;align-items:center;gap:8px;margin-bottom:6px;cursor:pointer;">
+            <input type="checkbox" id="cbInfoAct"> <b>Información adicional</b>
+          </label>
+          <div id="bloqueInfoAct" style="display:none;margin-bottom:8px;">
+            <textarea id="infoAct" rows="2" style="width:100%;box-sizing:border-box;"
+              placeholder="Información adicional de la gestión..."></textarea>
+          </div>
+
+          <!-- Actualización proveedor -->
+          <label style="display:flex;align-items:center;gap:8px;margin-bottom:6px;cursor:pointer;">
+            <input type="checkbox" id="cbActProvAct"> <b>Actualización proveedor</b>
+          </label>
+          <div id="bloqueActProvAct" style="display:none;margin-bottom:8px;">
+            <textarea id="actProvAct" rows="2" style="width:100%;box-sizing:border-box;"
+              placeholder="Respuesta o novedad del proveedor..."></textarea>
+          </div>
+
+          <!-- Pruebas adicionales -->
+          <label style="display:flex;align-items:center;gap:8px;margin-bottom:6px;cursor:pointer;">
+            <input type="checkbox" id="cbPruebasAct"> <b>Pruebas adicionales</b>
+          </label>
+          <div id="bloquePruebasAct" style="display:none;margin-bottom:8px;">
+            <textarea id="pruebasAct" rows="2" style="width:100%;box-sizing:border-box;"
+              placeholder="Pruebas realizadas en esta gestión..."></textarea>
+          </div>
+        </div>
+
+        <label><b>Estado:</b></label><br>
+        <select id="estadoAct" style="width:100%;margin-bottom:8px;">
+          <option value="">Seleccione estado</option>
+          <option value="pte_cliente">PTE CLIENTE</option>
+          <option value="pte_proveedor">PTE PROVEEDOR</option>
+          <option value="pte_atc">PTE ATC</option>
+          <option value="pte_interno">PTE INTERNO</option>
+          <option value="resuelta">RESUELTA</option>
+        </select>
+
+        <!-- Sub PTE CLIENTE Actualización -->
+        <div id="subClienteAct" style="display:none;margin-bottom:10px;padding:8px;border:1px solid #cce0ff;border-radius:6px;background:#f0f7ff;">
+          <label><b>Situación:</b></label><br>
+          <select id="subEstClienteAct" style="width:100%;margin-bottom:8px;">
+            <option value="">Seleccione...</option>
+            <option value="avisara">Avisará cuando pueda</option>
+            <option value="no_localizado">No localizado</option>
+            <option value="citado">Citado</option>
+          </select>
+          <div id="bloqueAvisaraAct" style="display:none;">
+            <label><b>Pruebas:</b></label><br>
+            <select id="pruebasIndAct" style="width:100%;margin-bottom:4px;">
+              <option value="">Seleccione...</option>
+              <option value="indicadas">Pruebas indicadas</option>
+              <option value="no_indicadas">Pruebas no indicadas</option>
+            </select>
+          </div>
+          <div id="bloqueNoLocAct" style="display:none;">
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+              <input type="checkbox" id="waEnviadoAct"> Se envía WhatsApp
+            </label>
+          </div>
+        </div>
+
+        <!-- Sub PTE PROVEEDOR Actualización -->
+        <div id="subProveedorAct" style="display:none;margin-bottom:10px;padding:8px;border:1px solid #ffd6a5;border-radius:6px;background:#fff8ee;">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:6px;">
+            <input type="checkbox" id="seReclamaAct"> Se reclama
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:6px;">
+            <input type="checkbox" id="escN2Act"> Escalado a N2 operador
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:8px;">
+            <input type="checkbox" id="escCoordAct"> Escalado a coordinador
+          </label>
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-bottom:6px;">
+            <input type="checkbox" id="cbTicketProvAct"> <b>Añadir ticket operador</b>
+          </label>
+          <div id="bloqueTicketProvAct" style="display:none;">
+            <input type="text" id="ticketProveedorAct" placeholder="Ej: TK-98765" style="width:100%;box-sizing:border-box;">
+          </div>
+        </div>
+
+        <!-- Cambiar prioridad -->
+        <label style="display:flex;align-items:center;gap:8px;margin-bottom:8px;cursor:pointer;">
+          <input type="checkbox" id="cambiarPrioridad"> <b>Cambiar prioridad</b>
+        </label>
+        <div id="bloqueNuevaPrioridad" style="display:none;margin-bottom:12px;">
+          <select id="prioridadAct" style="width:100%;">
+            <option value="">Seleccione prioridad</option>
+            <option value="extrema">🔴 Extrema</option>
+            <option value="alta">🟠 Alta</option>
+            <option value="baja">🟢 Baja</option>
+          </select>
+        </div>
+
+        <button id="btnGenerarAct" style="
+          width:100%;background:#007bff;color:white;
+          border:none;padding:8px;border-radius:6px;cursor:pointer;
+          transition:background 0.3s;">
+          📝 Generar resultado
+        </button>
       </div>
-
-      <div id="bloqueTC" style="display:none;margin-bottom:10px;">
-        <label><b>Teléfono de contacto:</b></label><br>
-        <input id="telefonoContacto" type="text" placeholder="Ej: 612345678" style="width:100%;">
-      </div>
-
-      <button id="generarResultadoBtn" style="
-        width:100%;
-        background:#007bff;
-        color:white;
-        border:none;
-        padding:8px;
-        border-radius:6px;
-        cursor:pointer;
-        margin-top:8px;
-      ">📝 Generar resultado</button>
     `;
 
     /**************************************************************************
-     * 🔧 LÓGICA FUNCIONAL
+     * REFERENCIAS
      **************************************************************************/
-    const tipoGestion = contenedor.querySelector('#tipoGestion');
-    const bloqueInicio = contenedor.querySelector('#bloqueInicioGestion');
-    const operadorSel = contenedor.querySelector('#operador');
-    const tipoIncidencia = contenedor.querySelector('#tipoIncidencia');
-    const datosAgotados = contenedor.querySelector('#datosAgotados');
-    const bloqueDatosAgotados = contenedor.querySelector('#bloqueDatosAgotados');
-    const subBonoBox = contenedor.querySelector('#subBonoBox');
-    const infoAdicional = contenedor.querySelector('#infoAdicional');
-    const acciones = contenedor.querySelector('#acciones');
-    const resolucion = contenedor.querySelector('#resolucion');
-    const bloqueTicket = contenedor.querySelector('#bloqueTicket');
-    const numeroTicket = contenedor.querySelector('#numeroTicket');
-    const bloqueTC = contenedor.querySelector('#bloqueTC');
-    const telefonoContacto = contenedor.querySelector('#telefonoContacto');
-    const btnGenerar = contenedor.querySelector('#generarResultadoBtn');
+    const q = id => contenedor.querySelector(`#${id}`);
 
-    let subflujoBono = null;
+    const tipoGestion         = q('tipoGestion');
+    const bloqueNueva         = q('bloqueNueva');
+    const bloqueActualizacion = q('bloqueActualizacion');
 
-    // Mostrar / ocultar secciones según tipo de gestión
-    tipoGestion.addEventListener('change', () => {
-      if (tipoGestion.value === 'inicio') {
-        bloqueInicio.style.display = 'block';
-      } else {
-        bloqueInicio.style.display = 'none';
-        subBonoBox.style.display = 'none';
+    // Nueva
+    const esHija                   = q('esHija');
+    const bloqueHija               = q('bloqueHija');
+    const incMadre                 = q('incMadre');
+    const operador                 = q('operador');
+    const motivoInc                = q('motivoInc');
+    const bloqueDatosAgotadosNueva = q('bloqueDatosAgotadosNueva');
+    const datosAgotadosNueva       = q('datosAgotadosNueva');
+    const preguntasBonoNueva       = q('preguntasBonoNueva');
+    const interesBonoNueva         = q('interesBonoNueva');
+    const interesTarifaNueva       = q('interesTarifaNueva');
+    const subBonoBoxNueva          = q('subBonoBoxNueva');
+    const infoAdicional            = q('infoAdicional');
+    const pruebasRealizadas        = q('pruebasRealizadas');
+    const estadoNueva              = q('estadoNueva');
+    const subClienteNueva          = q('subClienteNueva');
+    const subEstClienteNueva       = q('subEstClienteNueva');
+    const bloqueAvisaraNueva       = q('bloqueAvisaraNueva');
+    const pruebasIndNueva          = q('pruebasIndNueva');
+    const bloqueNoLocNueva         = q('bloqueNoLocNueva');
+    const waEnviadoNueva           = q('waEnviadoNueva');
+    const subProveedorNueva        = q('subProveedorNueva');
+    const seReclamaNueva           = q('seReclamaNueva');
+    const escN2Nueva               = q('escN2Nueva');
+    const escCoordNueva            = q('escCoordNueva');
+    const ticketProveedorNueva     = q('ticketProveedorNueva');
+    const bloquePrioridadNueva     = q('bloquePrioridadNueva');
+    const prioridadNueva           = q('prioridadNueva');
+    const btnGenerarNueva          = q('btnGenerarNueva');
+
+    // Actualización
+    const cambiarMotivo            = q('cambiarMotivo');
+    const bloqueNuevoMotivo        = q('bloqueNuevoMotivo');
+    const motivoAct                = q('motivoAct');
+    const bloqueDatosAgotadosAct   = q('bloqueDatosAgotadosAct');
+    const datosAgotadosAct         = q('datosAgotadosAct');
+    const preguntasBonoAct         = q('preguntasBonoAct');
+    const interesBonoAct           = q('interesBonoAct');
+    const interesTarifaAct         = q('interesTarifaAct');
+    const subBonoBoxAct            = q('subBonoBoxAct');
+    const cbInfoAct                = q('cbInfoAct');
+    const bloqueInfoAct            = q('bloqueInfoAct');
+    const infoAct                  = q('infoAct');
+    const cbActProvAct             = q('cbActProvAct');
+    const bloqueActProvAct         = q('bloqueActProvAct');
+    const actProvAct               = q('actProvAct');
+    const cbPruebasAct             = q('cbPruebasAct');
+    const bloquePruebasAct         = q('bloquePruebasAct');
+    const pruebasAct               = q('pruebasAct');
+    const estadoAct                = q('estadoAct');
+    const subClienteAct            = q('subClienteAct');
+    const subEstClienteAct         = q('subEstClienteAct');
+    const bloqueAvisaraAct         = q('bloqueAvisaraAct');
+    const pruebasIndAct            = q('pruebasIndAct');
+    const bloqueNoLocAct           = q('bloqueNoLocAct');
+    const waEnviadoAct             = q('waEnviadoAct');
+    const subProveedorAct          = q('subProveedorAct');
+    const seReclamaAct             = q('seReclamaAct');
+    const escN2Act                 = q('escN2Act');
+    const escCoordAct              = q('escCoordAct');
+    const cbTicketProvAct          = q('cbTicketProvAct');
+    const bloqueTicketProvAct      = q('bloqueTicketProvAct');
+    const ticketProveedorAct       = q('ticketProveedorAct');
+    const cambiarPrioridad         = q('cambiarPrioridad');
+    const bloqueNuevaPrioridad     = q('bloqueNuevaPrioridad');
+    const prioridadAct             = q('prioridadAct');
+    const btnGenerarAct            = q('btnGenerarAct');
+
+    let subflujoBono    = null;
+    let subflujoBonoAct = null;
+
+    /**************************************************************************
+     * HELPERS
+     **************************************************************************/
+    function necesitaBono(motivo) {
+      const t = motivo.toLowerCase();
+      return t.includes('datos móviles') || t.includes('lentitud');
+    }
+
+    function limpiarBono(caja, checkbox, preguntas, interesSelect, tarifaSelect) {
+      checkbox.checked        = false;
+      preguntas.style.display = 'none';
+      caja.style.display      = 'none';
+      caja.innerHTML          = '';
+      interesSelect.value     = '';
+      tarifaSelect.value      = '';
+      return null;
+    }
+
+    function montarBono(caja) {
+      caja.style.display = 'block';
+      caja.innerHTML     = '';
+      if (Flujos.bono) {
+        Flujos.bono.render(caja, pegarTexto, true);
+        return caja;
       }
-    });
+      return null;
+    }
 
-    // Mostrar checkbox de datos agotados según tipo
-    tipoIncidencia.addEventListener('change', () => {
-      const tipo = tipoIncidencia.value.toLowerCase();
-      const necesitaBono = tipo.includes('datos móviles') || tipo.includes('lentitud');
-      bloqueDatosAgotados.style.display = necesitaBono ? 'block' : 'none';
-      if (!necesitaBono) subBonoBox.style.display = 'none';
-    });
-
-    // Abrir flujo bono adicional
-    datosAgotados.addEventListener('change', () => {
-      if (datosAgotados.checked) {
-        subBonoBox.style.display = 'block';
-        subBonoBox.innerHTML = '';
-        if (Flujos.bono) {
-          Flujos.bono.render(subBonoBox, pegarTexto, true);
-          subflujoBono = subBonoBox;
+    function buildTextoEstado(est, subEstCliente, pruebasInd, waEnviado, seReclama, escN2, escCoord, ticket) {
+      if (est === 'pte_cliente') {
+        if (subEstCliente === 'avisara') {
+          const pruTxt = pruebasInd === 'indicadas' ? 'pruebas indicadas' : 'pruebas no indicadas';
+          return `PTE CLIENTE (avisará; ${pruTxt})`;
+        } else if (subEstCliente === 'no_localizado') {
+          return `PTE CLIENTE (no localizado${waEnviado ? '; WA enviado' : ''})`;
+        } else if (subEstCliente === 'citado') {
+          return `PTE CLIENTE (citado)`;
         }
-      } else {
-        subBonoBox.style.display = 'none';
-        subflujoBono = null;
+      } else if (est === 'pte_proveedor') {
+        const d = [];
+        if (ticket)    d.push(`ticket: ${ticket}`);
+        if (seReclama) d.push('reclamado');
+        if (escN2)     d.push('escalado N2');
+        if (escCoord)  d.push('escalado coordinador');
+        return `PTE PROVEEDOR${d.length ? ` (${d.join(', ')})` : ''}`;
+      }
+      const nombres = { pte_atc: 'PTE ATC', pte_interno: 'PTE INTERNO', resuelta: 'RESUELTA' };
+      return nombres[est] || est.toUpperCase();
+    }
+
+    function buildTextoDatos(interesBono, interesTarifa, subflujo) {
+      const partes = ['Datos agotados'];
+      partes.push(`Interesado en bono adicional: ${interesBono === 'si' ? 'Sí' : 'No'}`);
+      partes.push(`Interesado en ampliar tarifa: ${interesTarifa === 'si' ? 'Sí' : 'No'}`);
+      if (interesBono === 'si' && subflujo) {
+        const textoBono = subflujo.getTextoBono?.();
+        if (textoBono) partes.push(textoBono);
+      }
+      return partes.join('. ');
+    }
+
+    function feedbackBoton(btn) {
+      btn.style.background = '#28a745';
+      btn.textContent      = '✅ Generado';
+      setTimeout(() => {
+        btn.style.background = '#007bff';
+        btn.textContent      = '📝 Generar resultado';
+      }, 1500);
+    }
+
+    /**************************************************************************
+     * EVENTOS — CONTROL PRINCIPAL
+     **************************************************************************/
+    tipoGestion.addEventListener('change', () => {
+      bloqueNueva.style.display         = tipoGestion.value === 'nueva'         ? 'block' : 'none';
+      bloqueActualizacion.style.display = tipoGestion.value === 'actualizacion' ? 'block' : 'none';
+    });
+
+    /**************************************************************************
+     * EVENTOS — NUEVA INCIDENCIA
+     **************************************************************************/
+    esHija.addEventListener('change', () => {
+      bloqueHija.style.display = esHija.checked ? 'block' : 'none';
+    });
+
+    motivoInc.addEventListener('change', () => {
+      const mostrar = necesitaBono(motivoInc.value);
+      bloqueDatosAgotadosNueva.style.display = mostrar ? 'block' : 'none';
+      if (!mostrar) {
+        subflujoBono = limpiarBono(subBonoBoxNueva, datosAgotadosNueva,
+          preguntasBonoNueva, interesBonoNueva, interesTarifaNueva);
       }
     });
 
-    // Mostrar campos según resolución
-    resolucion.addEventListener('change', () => {
-      const val = resolucion.value;
-      bloqueTicket.style.display = val.includes('ticket') ? 'block' : 'none';
-      bloqueTC.style.display = val.includes('ATC') ? 'block' : 'none';
+    datosAgotadosNueva.addEventListener('change', () => {
+      preguntasBonoNueva.style.display = datosAgotadosNueva.checked ? 'block' : 'none';
+      if (!datosAgotadosNueva.checked) {
+        subBonoBoxNueva.style.display = 'none';
+        subflujoBono                  = null;
+        interesBonoNueva.value        = '';
+        interesTarifaNueva.value      = '';
+      }
     });
 
-    // 🧾 Generar resultado
-    btnGenerar.addEventListener('click', () => {
-      const gestion = tipoGestion.value;
-      const operador = operadorSel.value;
-      const tipo = tipoIncidencia.value;
+    interesBonoNueva.addEventListener('change', () => {
+      if (interesBonoNueva.value === 'si') {
+        subflujoBono = montarBono(subBonoBoxNueva);
+      } else {
+        subBonoBoxNueva.style.display = 'none';
+        subBonoBoxNueva.innerHTML     = '';
+        subflujoBono                  = null;
+      }
+    });
+
+    estadoNueva.addEventListener('change', () => {
+      const est = estadoNueva.value;
+      subClienteNueva.style.display      = est === 'pte_cliente'   ? 'block' : 'none';
+      subProveedorNueva.style.display    = est === 'pte_proveedor' ? 'block' : 'none';
+      bloquePrioridadNueva.style.display = est && est !== 'resuelta' ? 'block' : 'none';
+      subEstClienteNueva.value           = '';
+      bloqueAvisaraNueva.style.display   = 'none';
+      bloqueNoLocNueva.style.display     = 'none';
+      prioridadNueva.value               = '';
+    });
+
+    subEstClienteNueva.addEventListener('change', () => {
+      bloqueAvisaraNueva.style.display = subEstClienteNueva.value === 'avisara'       ? 'block' : 'none';
+      bloqueNoLocNueva.style.display   = subEstClienteNueva.value === 'no_localizado' ? 'block' : 'none';
+    });
+
+    /**************************************************************************
+     * EVENTOS — ACTUALIZACIÓN
+     **************************************************************************/
+    cambiarMotivo.addEventListener('change', () => {
+      bloqueNuevoMotivo.style.display = cambiarMotivo.checked ? 'block' : 'none';
+      if (!cambiarMotivo.checked) {
+        motivoAct.value = '';
+        bloqueDatosAgotadosAct.style.display = 'none';
+        subflujoBonoAct = limpiarBono(subBonoBoxAct, datosAgotadosAct,
+          preguntasBonoAct, interesBonoAct, interesTarifaAct);
+      }
+    });
+
+    motivoAct.addEventListener('change', () => {
+      const mostrar = necesitaBono(motivoAct.value);
+      bloqueDatosAgotadosAct.style.display = mostrar ? 'block' : 'none';
+      if (!mostrar) {
+        subflujoBonoAct = limpiarBono(subBonoBoxAct, datosAgotadosAct,
+          preguntasBonoAct, interesBonoAct, interesTarifaAct);
+      }
+    });
+
+    datosAgotadosAct.addEventListener('change', () => {
+      preguntasBonoAct.style.display = datosAgotadosAct.checked ? 'block' : 'none';
+      if (!datosAgotadosAct.checked) {
+        subBonoBoxAct.style.display = 'none';
+        subflujoBonoAct             = null;
+        interesBonoAct.value        = '';
+        interesTarifaAct.value      = '';
+      }
+    });
+
+    interesBonoAct.addEventListener('change', () => {
+      if (interesBonoAct.value === 'si') {
+        subflujoBonoAct = montarBono(subBonoBoxAct);
+      } else {
+        subBonoBoxAct.style.display = 'none';
+        subBonoBoxAct.innerHTML     = '';
+        subflujoBonoAct             = null;
+      }
+    });
+
+    // Checkboxes campos opcionales actualización
+    cbInfoAct.addEventListener('change', () => {
+      bloqueInfoAct.style.display = cbInfoAct.checked ? 'block' : 'none';
+      if (!cbInfoAct.checked) infoAct.value = '';
+    });
+
+    cbActProvAct.addEventListener('change', () => {
+      bloqueActProvAct.style.display = cbActProvAct.checked ? 'block' : 'none';
+      if (!cbActProvAct.checked) actProvAct.value = '';
+    });
+
+    cbPruebasAct.addEventListener('change', () => {
+      bloquePruebasAct.style.display = cbPruebasAct.checked ? 'block' : 'none';
+      if (!cbPruebasAct.checked) pruebasAct.value = '';
+    });
+
+    estadoAct.addEventListener('change', () => {
+      const est = estadoAct.value;
+      subClienteAct.style.display    = est === 'pte_cliente'   ? 'block' : 'none';
+      subProveedorAct.style.display  = est === 'pte_proveedor' ? 'block' : 'none';
+      subEstClienteAct.value         = '';
+      bloqueAvisaraAct.style.display = 'none';
+      bloqueNoLocAct.style.display   = 'none';
+    });
+
+    subEstClienteAct.addEventListener('change', () => {
+      bloqueAvisaraAct.style.display = subEstClienteAct.value === 'avisara'       ? 'block' : 'none';
+      bloqueNoLocAct.style.display   = subEstClienteAct.value === 'no_localizado' ? 'block' : 'none';
+    });
+
+    cbTicketProvAct.addEventListener('change', () => {
+      bloqueTicketProvAct.style.display = cbTicketProvAct.checked ? 'block' : 'none';
+      if (!cbTicketProvAct.checked) ticketProveedorAct.value = '';
+    });
+
+    cambiarPrioridad.addEventListener('change', () => {
+      bloqueNuevaPrioridad.style.display = cambiarPrioridad.checked ? 'block' : 'none';
+      if (!cambiarPrioridad.checked) prioridadAct.value = '';
+    });
+
+    /**************************************************************************
+     * GENERAR — NUEVA INCIDENCIA
+     **************************************************************************/
+    btnGenerarNueva.addEventListener('click', () => {
+      const est = estadoNueva.value;
+
+      if (!operador.value)  return alert('⚠️ Selecciona el operador.');
+      if (!motivoInc.value) return alert('⚠️ Selecciona el motivo de la incidencia.');
+      if (!est)             return alert('⚠️ Selecciona el estado.');
+      if (est !== 'resuelta' && !prioridadNueva.value)
+                            return alert('⚠️ Selecciona la prioridad.');
+      if (est === 'pte_cliente' && !subEstClienteNueva.value)
+                            return alert('⚠️ Selecciona la situación del cliente.');
+      if (subEstClienteNueva.value === 'avisara' && !pruebasIndNueva.value)
+                            return alert('⚠️ Indica si las pruebas fueron indicadas o no.');
+      if (datosAgotadosNueva.checked) {
+        if (!interesBonoNueva.value)   return alert('⚠️ Indica si el cliente está interesado en bono adicional.');
+        if (!interesTarifaNueva.value) return alert('⚠️ Indica si el cliente está interesado en ampliar tarifa.');
+        if (interesBonoNueva.value === 'si' && !subflujoBono?.getTextoBono?.())
+          return alert('⚠️ Completa los datos del bono adicional.');
+      }
+        if (est === 'pte_proveedor' && !ticketProveedorNueva.value.trim())
+            return alert('⚠️ Indica el número de ticket del operador.');
+
+      const zona    = motivoInc.selectedOptions[0]?.parentElement?.label || '';
+      const ticket  = ticketProveedorNueva.value.trim();
+      const textoEstado = buildTextoEstado(
+        est,
+        subEstClienteNueva.value, pruebasIndNueva.value, waEnviadoNueva.checked,
+        seReclamaNueva.checked, escN2Nueva.checked, escCoordNueva.checked,
+        ticket
+      );
+
+      const partes = [];
+      partes.push('Nueva incidencia');
+      if (esHija.checked) partes.push(`hija de ${incMadre.value.trim() || 'sin nº'}`);
+      partes.push(`Operador: ${operador.value}`);
+      partes.push(`Motivo: ${motivoInc.value} [${zona}]`);
+
       const info = infoAdicional.value.trim();
-      const act = acciones.value.trim();
-      const res = resolucion.value;
-      const ticket = numeroTicket.value.trim();
-      const tel = telefonoContacto.value.trim();
+      const pru  = pruebasRealizadas.value.trim();
+      if (info) partes.push(`Info: ${info}`);
+      if (pru)  partes.push(`Pruebas: ${pru}`);
 
-      if (!gestion) return alert('⚠️ Debes seleccionar tipo de gestión.');
-      if (gestion === 'inicio' && !tipo) return alert('⚠️ Debes seleccionar tipo de incidencia.');
-      if (res.includes('ATC') && !tel) return alert('⚠️ Debes indicar un teléfono de contacto.');
-
-      let texto = '';
-
-      if (gestion === 'inicio') {
-        texto = `Inicio gestión por incidencia móvil (${operador || 'sin operador especificado'}). `;
-        texto += `Tipo: ${tipo}. `;
-      } else {
-        texto = `Seguimiento de incidencia móvil. `;
+      if (datosAgotadosNueva.checked) {
+        partes.push(buildTextoDatos(interesBonoNueva.value, interesTarifaNueva.value, subflujoBono));
       }
 
-      if (info) texto += `Info: ${info}. `;
-      if (act) texto += `Acciones: ${act}. `;
+      if (est !== 'resuelta') partes.push(`Prioridad: ${prioridadNueva.value.toUpperCase()}`);
+      partes.push(`Estado: ${textoEstado}`);
 
-      if (res.includes('Sí')) texto += `Incidencia solucionada.`;
-      else if (res.includes('Pendiente')) texto += `Pendiente comprobación por parte del cliente.`;
-      else if (res.includes('ticket')) texto += `No se soluciona, se abre ticket ${ticket || '(sin nº)'}.`;
-      else if (res.includes('ATC')) texto += `Se deriva a ATC. TC: ${tel}.`;
+      pegarTexto(partes.join('. ') + '.');
+      feedbackBoton(btnGenerarNueva);
 
-      // Ejecutar bono adicional si lo marcó
-      if (gestion === 'inicio' && datosAgotados.checked && subflujoBono?.generarYEnviarBono) {
-        subflujoBono.generarYEnviarBono();
+      if (datosAgotadosNueva.checked && interesBonoNueva.value === 'si' && subflujoBono) {
+        subflujoBono.enviarCorreoBono?.();
       }
-
-      pegarTexto(texto.trim());
     });
+
+    /**************************************************************************
+     * GENERAR — ACTUALIZACIÓN
+     **************************************************************************/
+    btnGenerarAct.addEventListener('click', () => {
+      const est = estadoAct.value;
+
+      if (!est) return alert('⚠️ Selecciona el nuevo estado.');
+      if (est === 'pte_cliente' && !subEstClienteAct.value)
+                return alert('⚠️ Selecciona la situación del cliente.');
+      if (subEstClienteAct.value === 'avisara' && !pruebasIndAct.value)
+                return alert('⚠️ Indica si las pruebas fueron indicadas o no.');
+      if (cambiarMotivo.checked && !motivoAct.value)
+                return alert('⚠️ Selecciona el nuevo motivo o desmarca la opción.');
+      if (cambiarPrioridad.checked && !prioridadAct.value)
+                return alert('⚠️ Selecciona la nueva prioridad o desmarca la opción.');
+      if (cbTicketProvAct.checked && !ticketProveedorAct.value.trim())
+                return alert('⚠️ Indica el número de ticket o desmarca la opción.');
+      if (datosAgotadosAct.checked) {
+        if (!interesBonoAct.value)   return alert('⚠️ Indica si el cliente está interesado en bono adicional.');
+        if (!interesTarifaAct.value) return alert('⚠️ Indica si el cliente está interesado en ampliar tarifa.');
+        if (interesBonoAct.value === 'si' && !subflujoBonoAct?.getTextoBono?.())
+          return alert('⚠️ Completa los datos del bono adicional.');
+      }
+
+      const ticket = cbTicketProvAct.checked ? ticketProveedorAct.value.trim() : '';
+      const textoEstado = buildTextoEstado(
+        est,
+        subEstClienteAct.value, pruebasIndAct.value, waEnviadoAct.checked,
+        seReclamaAct.checked, escN2Act.checked, escCoordAct.checked,
+        ticket
+      );
+
+      const partes = [];
+      partes.push('Actualización');
+
+      if (cambiarMotivo.checked) {
+        const zona = motivoAct.selectedOptions[0]?.parentElement?.label || '';
+        partes.push(`Motivo: ${motivoAct.value} [${zona}]`);
+      }
+
+      // Campos opcionales
+      if (cbInfoAct.checked && infoAct.value.trim())
+        partes.push(`Info: ${infoAct.value.trim()}`);
+      if (cbActProvAct.checked && actProvAct.value.trim())
+        partes.push(`Actualización proveedor: ${actProvAct.value.trim()}`);
+      if (cbPruebasAct.checked && pruebasAct.value.trim())
+        partes.push(`Pruebas: ${pruebasAct.value.trim()}`);
+
+      if (datosAgotadosAct.checked) {
+        partes.push(buildTextoDatos(interesBonoAct.value, interesTarifaAct.value, subflujoBonoAct));
+      }
+
+      if (cambiarPrioridad.checked && est !== 'resuelta') {
+        partes.push(`Prioridad: ${prioridadAct.value.toUpperCase()}`);
+      }
+      partes.push(`Estado: ${textoEstado}`);
+
+      pegarTexto(partes.join('. ') + '.');
+      feedbackBoton(btnGenerarAct);
+
+      if (datosAgotadosAct.checked && interesBonoAct.value === 'si' && subflujoBonoAct) {
+        subflujoBonoAct.enviarCorreoBono?.();
+      }
+    });
+
   }
 });
 
