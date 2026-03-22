@@ -1452,7 +1452,7 @@ Flujos.registrar({
       const clienteLink   = document.querySelector('a[id*="textCliente"]');
       const codCliente    = clienteLink ? clienteLink.textContent.trim().split('-')[0].trim() : '(sin código)';
 
-      const to     = `grabacioncontratos@onlycable.es,${correoPob}`;
+      const to     = `grabaciondecontratos@onlycable.es,${correoPob}`;
       const asunto = `${codCliente} - Línea ${linea} - BONO ADICIONAL`;
       const cuerpo = `Buenas,%0D%0A%0D%0ASe aplica bono adicional (${bonoFinal}) de ${operador} en la línea ${linea} de ${poblacion}.%0D%0A%0D%0AUn saludo.`;
 
