@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Asistente de Incidencias CRM
 // @namespace    gosbilling.crm
-// @version      4.2
+// @version      4.3
 // @description  Estructura modular con movimiento y redimensionado funcional (base limpia)
 // @match        https://gossan.onlycable.es:8083/gosbilling/user/incidencias/ma-incidencias.xhtml*
 // @grant        none
