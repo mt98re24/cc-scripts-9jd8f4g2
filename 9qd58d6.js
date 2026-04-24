@@ -4828,6 +4828,484 @@ Flujos.registrar({
   }
 });
 
+// ============================================================
+// FLUJO: Reconexión / Suspensión Fibraverde
+// ============================================================
+
+function fvFindSelectTipoTrabajo() {
+  return [...document.querySelectorAll('select[id*="formIncidencia"]')]
+    .find(s => [...s.options].some(o => o.value === '19' && o.text.trim() === 'RECONEXION'));
+}
+
+function fvFindSelectEstado() {
+  return [...document.querySelectorAll('select[id*="formIncidencia"]')]
+    .find(s => [...s.options].some(o => o.value === '22' && o.text.trim() === 'INTERMEDIO'));
+}
+
+function fvSetPFSelect(findFn, value) {
+  const sel = findFn();
+  if (!sel) { console.warn('[FV] Select no encontrado'); return; }
+  sel.value = String(value);
+  const opt = [...sel.options].find(o => o.value === String(value));
+  const container = sel.closest('[class*="ui-selectonemenu"]');
+  const lbl = container && container.querySelector('.ui-selectonemenu-label');
+  if (lbl && opt) lbl.textContent = opt.text;
+  sel.dispatchEvent(new Event('change', { bubbles: true }));
+  try { window.jQuery && jQuery(sel).trigger('change'); } catch (_) {}
+}
+
+function fvSetAsignacion(value) {
+  const cb = document.querySelector(`input[name*="multipleAsignaciones"][value="${value}"]`);
+  if (!cb) { console.warn('[FV] Checkbox asignación no encontrado:', value); return; }
+  if (cb.checked) return;
+  cb.checked = true;
+  cb.dispatchEvent(new Event('change', { bubbles: true }));
+  try { window.jQuery && jQuery(cb).trigger('change'); } catch (_) {}
+  const container = cb.closest('[class*="ui-selectcheckboxmenu"]');
+  const labelEl = container && container.querySelector('.ui-selectcheckboxmenu-multiple-container');
+  if (labelEl) {
+    const labelFor = document.querySelector(`label[for="${cb.id}"]`);
+    const txt = labelFor ? labelFor.textContent.trim() : value;
+    if (![...labelEl.querySelectorAll('li')].some(li => li.textContent.trim() === txt)) {
+      const li = document.createElement('li');
+      li.className = 'ui-selectcheckboxmenu-token ui-state-active ui-corner-all';
+      li.innerHTML = `<span class="ui-selectcheckboxmenu-token-label">${txt}</span>`;
+      labelEl.appendChild(li);
+    }
+  }
+}
+
+function fvSetFecha(ddmmyyyy) {
+  const campo = document.querySelector('form[id*="formIncidencia"] input.hasDatepicker');
+  if (!campo) { console.warn('[FV] Campo fecha no encontrado'); return; }
+  campo.value = ddmmyyyy;
+  ['input', 'change', 'blur'].forEach(ev => campo.dispatchEvent(new Event(ev, { bubbles: true })));
+  try { window.jQuery && jQuery(campo).datepicker('setDate', ddmmyyyy); } catch (_) {}
+}
+
+function fvObtenerCodCliente() {
+  const link = document.querySelector('a[id*="textCliente"]');
+  const m = link && (link.getAttribute('href') || '').match(/[?&]id=(\d+)/);
+  return m ? m[1] : null;
+}
+
+function fvFmtFecha(isoVal) {
+  if (!isoVal) return '';
+  const [y, m, d] = isoVal.split('-');
+  return `${d}/${m}/${y}`;
+}
+
+function fvIsoADate(isoVal) {
+  if (!isoVal) return null;
+  const [y, m, d] = isoVal.split('-');
+  return new Date(y, m - 1, d);
+}
+
+function fvAplicarCampos({ tipoTrabajo, estado, fecha }) {
+  fvSetPFSelect(fvFindSelectTipoTrabajo, tipoTrabajo);
+  fvSetPFSelect(fvFindSelectEstado, estado);
+  fvSetAsignacion('230'); // BAJAS FIBRAVERDE
+  if (fecha) fvSetFecha(fecha);
+}
+
+function fvAbrirPestana(url) {
+  if (typeof GM_openInTab === 'function') {
+    GM_openInTab(url, false);
+  } else {
+    const a = document.createElement('a');
+    a.href = url; a.target = '_blank'; a.rel = 'noopener';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  }
+}
+
+// ── Construcción del correo ───────────────────────────────────
+
+function fvBuildEmail({ cod, canal, dato, hr, hs, mr, ms, frFmt, fsFmt, frRaw, fsRaw }) {
+  const esOnlycable = canal === 'onlycable';
+  const CANAL_LABEL = { correo: 'correo', whatsapp: 'WhatsApp', llamada: 'llamada' };
+
+  // Asunto
+  let asuntoParte = '';
+  if (hr && hs)       asuntoParte = 'RECONEXION + SUSPENSION';
+  else if (hr)        asuntoParte = 'RECONEXION';
+  else                asuntoParte = 'SUSPENSION';
+  const asunto = `${cod} - ${asuntoParte} FIBRAVERDE`;
+
+  // Cabecera del cuerpo
+  const cl  = !esOnlycable ? CANAL_LABEL[canal] : null;
+  const ct  = !esOnlycable ? ` (${dato})` : '';
+  const pfx = esOnlycable
+    ? 'Entra correo interno con solicitud'
+    : `Cliente solicita por ${cl}${ct}`;
+
+  // ── Una sola acción → párrafo simple ──
+  if (!hr || !hs) {
+    const esInmediata = hr ? mr === 'inmediata' : ms === 'inmediata';
+    const accionTxt   = hr ? 'reconexión' : 'suspensión';
+    const fechaTxt    = hr ? frFmt : fsFmt;
+    let linea = '';
+    if (esOnlycable) {
+      linea = esInmediata
+        ? `${pfx} de ${accionTxt}. ${hr ? 'Reconexión' : 'Suspensión'} realizada.`
+        : `${pfx} de ${accionTxt} para el día ${fechaTxt}. Creada incidencia.`;
+    } else {
+      linea = esInmediata
+        ? `${pfx} ${accionTxt} inmediata del servicio de fibraverde. ${hr ? 'Reconexión' : 'Suspensión'} realizada.`
+        : `${pfx} ${accionTxt} del servicio de fibraverde para el día ${fechaTxt}. Creada incidencia.`;
+    }
+    const cuerpo = `Buenas,\n\n${linea}\n\nUn saludo.`;
+    return { asunto, cuerpo };
+  }
+
+  // ── Dos acciones → bullets ordenados ──
+  // Determinar orden: inmediata primero; si ambas programadas, fecha más próxima primero
+  let primera, segunda;
+
+  if (mr === 'inmediata' && ms !== 'inmediata') {
+    primera = 'r'; segunda = 's';
+  } else if (ms === 'inmediata' && mr !== 'inmediata') {
+    primera = 's'; segunda = 'r';
+  } else if (mr === 'inmediata' && ms === 'inmediata') {
+    primera = 'r'; segunda = 's'; // ambas inmediatas: reconexión primero
+  } else {
+    // ambas programadas: fecha más próxima primero
+    const dr = fvIsoADate(frRaw), ds = fvIsoADate(fsRaw);
+    primera = (dr <= ds) ? 'r' : 's';
+    segunda = primera === 'r' ? 's' : 'r';
+  }
+
+  function bulletTexto(accion) {
+    const esR       = accion === 'r';
+    const modo      = esR ? mr : ms;
+    const fecha     = esR ? frFmt : fsFmt;
+    const nombre    = esR ? 'Reconexión' : 'Suspensión';
+    const gestionada = esR ? 'Gestionada reconexión.' : 'Gestionada suspensión.';
+    if (modo === 'inmediata') {
+      return `* ${nombre}: inmediata. ${gestionada}`;
+    } else {
+      return `* ${nombre}: para el día ${fecha}. Creada incidencia.`;
+    }
+  }
+
+  const cabecera = esOnlycable
+    ? `${pfx}:`
+    : `${pfx}:`;
+
+  const cuerpo = `Buenas,\n\n${cabecera}\n\n${bulletTexto(primera)}\n${bulletTexto(segunda)}\n\nUn saludo.`;
+  return { asunto, cuerpo };
+}
+
+function fvAbrirCorreo({ asunto, cuerpo }) {
+  const a = encodeURIComponent(asunto);
+  const c = encodeURIComponent(cuerpo);
+  location.href = `mailto:grabaciondecontratos@onlycable.es,atencionalcliente@telecartagena.es?subject=${a}&body=${c}`;
+}
+
+// ── Prefill automático para la segunda pestaña ────────────────
+
+(function fvInitPrefill() {
+  const params = new URLSearchParams(location.search);
+  const key = params.get('recall_fv');
+  if (!key) return;
+  const raw = localStorage.getItem(key);
+  if (!raw) return;
+  let datos;
+  try { datos = JSON.parse(raw); } catch (_) { return; }
+  localStorage.removeItem(key);
+
+  function escribirDesc(texto) {
+    const campo =
+      document.querySelector('form[id*="formIncidencia"] textarea') ||
+      document.querySelector('textarea[role="textbox"]');
+    if (!campo) return;
+    const agente = window.crmAgente || 'MusinT.';
+    const ahora  = new Date();
+    const f = ahora.toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric' });
+    const h = ahora.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
+    campo.value = `**${agente} ${f} ${h} - ${texto}`;
+    ['input', 'change'].forEach(ev => campo.dispatchEvent(new Event(ev, { bubbles: true })));
+  }
+
+  function intentar(n = 0) {
+    if (n > 30) return;
+    if (!document.querySelector('form[id*="formIncidencia"]')) {
+      setTimeout(() => intentar(n + 1), 500); return;
+    }
+    setTimeout(() => {
+      fvAplicarCampos(datos);
+      escribirDesc(datos.descripcion);
+    }, 800);
+  }
+  intentar();
+})();
+
+// ── Registro del flujo ────────────────────────────────────────
+
+Flujos.registrar({
+  id: 'reconexionSuspensionFV',
+  nombre: 'Reconexión / Suspensión FV',
+  tipos: ['administrativo'],
+  categorias: ['administrativo'],
+
+  render(contenedor, pegarTexto) {
+
+    const CANAL_LABEL = {
+      correo:   'correo',
+      whatsapp: 'WhatsApp',
+      llamada:  'llamada'
+    };
+
+    const SB  = 'border:1px solid #ccc;border-radius:4px;background:#fff;padding:5px 8px;cursor:pointer;font-size:12px;';
+    const SBO = 'border:1px solid #007bff;border-radius:4px;background:#e8f0fe;color:#007bff;font-weight:bold;padding:5px 8px;cursor:pointer;font-size:12px;';
+    const SBL = 'background:#f8f9fa;border-left:3px solid #007bff;padding:6px 8px;margin-top:5px;border-radius:0 4px 4px 0;';
+    const RW  = 'display:block;cursor:pointer;margin-bottom:4px;';
+
+    contenedor.innerHTML = `
+      <div style="font-size:12px;padding:4px 2px;">
+
+        <div style="font-weight:bold;margin-bottom:5px;color:#444;">📡 Canal de entrada</div>
+        <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px;">
+          <button class="fv-c" data-c="onlycable" style="${SB}">Correo Onlycable</button>
+          <button class="fv-c" data-c="correo"    style="${SB}">Correo cliente</button>
+          <button class="fv-c" data-c="whatsapp"  style="${SB}">WhatsApp cliente</button>
+          <button class="fv-c" data-c="llamada"   style="${SB}" title="No recomendado">📵 Llamada cliente</button>
+        </div>
+        <div id="fv-av-llamada" style="display:none;color:#c0392b;font-size:11px;margin-bottom:5px;">
+          ⚠️ Canal no recomendado
+        </div>
+        <div id="fv-dato-wrap" style="display:none;margin-bottom:8px;">
+          <input id="fv-dato" type="text" placeholder="..."
+            style="width:95%;padding:4px;border:1px solid #ccc;border-radius:4px;font-size:12px;">
+        </div>
+
+        <div id="fv-acc" style="display:none;">
+          <div style="font-weight:bold;margin-bottom:5px;color:#444;">⚙️ Acciones</div>
+
+          <!-- Reconexión -->
+          <div style="margin-bottom:7px;">
+            <label style="cursor:pointer;font-weight:bold;">
+              <input type="checkbox" id="fv-chk-r"> Reconexión
+            </label>
+            <div id="fv-bl-r" style="display:none;${SBL}">
+              <label style="${RW}"><input type="radio" name="fv-mr" value="inmediata"> Inmediata</label>
+              <label style="${RW}"><input type="radio" name="fv-mr" value="programada"> Programada</label>
+              <div id="fv-fr-w" style="display:none;margin-top:4px;">
+                <input type="date" id="fv-fr"
+                  style="padding:3px;border:1px solid #ccc;border-radius:4px;font-size:12px;">
+              </div>
+            </div>
+          </div>
+
+          <!-- Suspensión -->
+          <div style="margin-bottom:10px;">
+            <label style="cursor:pointer;font-weight:bold;">
+              <input type="checkbox" id="fv-chk-s"> Suspensión
+            </label>
+            <div id="fv-bl-s" style="display:none;${SBL}">
+              <label style="${RW}"><input type="radio" name="fv-ms" value="inmediata"> Inmediata</label>
+              <label style="${RW}"><input type="radio" name="fv-ms" value="programada"> Programada</label>
+              <div id="fv-fs-w" style="display:none;margin-top:4px;">
+                <input type="date" id="fv-fs"
+                  style="padding:3px;border:1px solid #ccc;border-radius:4px;font-size:12px;">
+              </div>
+            </div>
+          </div>
+
+          <button id="fv-gen" style="
+            width:100%;padding:7px;background:#007bff;color:#fff;border:none;
+            border-radius:5px;font-weight:bold;cursor:pointer;font-size:12px;
+            transition:background 0.2s;">
+            ⚡ Generar
+          </button>
+
+        </div>
+      </div>
+    `;
+
+    const q = id => contenedor.querySelector('#' + id);
+    let canal = null;
+
+    const getModo = name =>
+      (contenedor.querySelector(`input[name="${name}"]:checked`) || {}).value || null;
+
+    // ── Descripción incidencia ────────────────────────────────
+
+    function buildDesc({ hr, hs, mr, ms, frFmt, fsFmt, dato }) {
+      const esOnlycable = canal === 'onlycable';
+      const cl  = !esOnlycable ? CANAL_LABEL[canal] : null;
+      const ct  = !esOnlycable ? ` (${dato})` : '';
+      const pfx = esOnlycable
+        ? 'Entra correo interno con solicitud de'
+        : `Cliente solicita por ${cl}${ct}`;
+
+      if (hr && !hs) {
+        return mr === 'inmediata'
+          ? (esOnlycable
+              ? `${pfx} reconexión. Reconexión realizada.`
+              : `${pfx} reconexión inmediata del servicio de fibraverde. Reconexión realizada.`)
+          : (esOnlycable
+              ? `${pfx} reconexión para el día ${frFmt}.`
+              : `${pfx} reconexión del servicio de fibraverde para el día ${frFmt}.`);
+      }
+
+      if (!hr && hs) {
+        return ms === 'inmediata'
+          ? (esOnlycable
+              ? `${pfx} suspensión. Suspensión realizada.`
+              : `${pfx} suspensión inmediata del servicio de fibraverde. Suspensión realizada.`)
+          : (esOnlycable
+              ? `${pfx} suspensión para el día ${fsFmt}.`
+              : `${pfx} suspensión del servicio de fibraverde para el día ${fsFmt}.`);
+      }
+
+      // Ambas
+      if (mr === 'inmediata' && ms === 'inmediata') {
+        return esOnlycable
+          ? `${pfx} reconexión y suspensión inmediatas. Reconexión y suspensión realizadas.`
+          : `${pfx} reconexión y suspensión inmediatas del servicio de fibraverde. Reconexión y suspensión realizadas.`;
+      }
+      if (mr === 'inmediata' && ms === 'programada') {
+        return esOnlycable
+          ? `${pfx} reconexión inmediata y suspensión para el día ${fsFmt}. Reconexión realizada.`
+          : `${pfx} reconexión inmediata y suspensión para el día ${fsFmt} del servicio de fibraverde. Reconexión realizada.`;
+      }
+      if (mr === 'programada' && ms === 'inmediata') {
+        return esOnlycable
+          ? `${pfx} suspensión inmediata y reconexión para el día ${frFmt}. Suspensión realizada.`
+          : `${pfx} suspensión inmediata y reconexión para el día ${frFmt} del servicio de fibraverde. Suspensión realizada.`;
+      }
+      return ''; // ambas programadas — no usa esta función
+    }
+
+    function buildDescSimple(accion, fecha, dato) {
+      const esOnlycable = canal === 'onlycable';
+      const cl  = !esOnlycable ? CANAL_LABEL[canal] : null;
+      const ct  = !esOnlycable ? ` (${dato})` : '';
+      const pfx = esOnlycable
+        ? 'Entra correo interno con solicitud de'
+        : `Cliente solicita por ${cl}${ct}`;
+      const accionTxt = accion === 'r' ? 'reconexión' : 'suspensión';
+      return esOnlycable
+        ? `${pfx} ${accionTxt} para el día ${fecha}.`
+        : `${pfx} ${accionTxt} del servicio de fibraverde para el día ${fecha}.`;
+    }
+
+    function feedbackGen() {
+      const b = q('fv-gen');
+      b.style.background = '#28a745';
+      b.textContent = '✅ Generado';
+      setTimeout(() => { b.style.background = '#007bff'; b.textContent = '⚡ Generar'; }, 1500);
+    }
+
+    // ── Canal ─────────────────────────────────────────────────
+    contenedor.querySelectorAll('.fv-c').forEach(btn => btn.addEventListener('click', () => {
+      contenedor.querySelectorAll('.fv-c').forEach(b => b.style.cssText = SB);
+      btn.style.cssText = SBO;
+      canal = btn.dataset.c;
+      q('fv-av-llamada').style.display = canal === 'llamada' ? 'block' : 'none';
+      const nd = canal !== 'onlycable';
+      q('fv-dato-wrap').style.display = nd ? 'block' : 'none';
+      if (!nd) q('fv-dato').value = '';
+      const inp = q('fv-dato');
+      inp.type = canal === 'correo' ? 'email' : 'tel';
+      inp.placeholder = canal === 'correo' ? 'correo@ejemplo.com' : 'Número de teléfono';
+      q('fv-acc').style.display = 'block';
+    }));
+
+    // ── Checkboxes ────────────────────────────────────────────
+    q('fv-chk-r').addEventListener('change', e => {
+      q('fv-bl-r').style.display = e.target.checked ? 'block' : 'none';
+      if (!e.target.checked) {
+        contenedor.querySelectorAll('[name="fv-mr"]').forEach(r => r.checked = false);
+        q('fv-fr-w').style.display = 'none';
+      }
+    });
+    q('fv-chk-s').addEventListener('change', e => {
+      q('fv-bl-s').style.display = e.target.checked ? 'block' : 'none';
+      if (!e.target.checked) {
+        contenedor.querySelectorAll('[name="fv-ms"]').forEach(r => r.checked = false);
+        q('fv-fs-w').style.display = 'none';
+      }
+    });
+
+    // ── Radios fecha ──────────────────────────────────────────
+    contenedor.querySelectorAll('[name="fv-mr"]').forEach(r =>
+      r.addEventListener('change', () =>
+        q('fv-fr-w').style.display = r.value === 'programada' && r.checked ? 'block' : 'none'));
+    contenedor.querySelectorAll('[name="fv-ms"]').forEach(r =>
+      r.addEventListener('change', () =>
+        q('fv-fs-w').style.display = r.value === 'programada' && r.checked ? 'block' : 'none'));
+
+    // ── Botón generar ─────────────────────────────────────────
+    q('fv-gen').addEventListener('click', () => {
+
+      if (!canal) return alert('Selecciona el canal de entrada.');
+      const dato = q('fv-dato').value.trim();
+      if (canal !== 'onlycable' && !dato) return alert('Introduce el dato de contacto del cliente.');
+      const hr = q('fv-chk-r').checked, hs = q('fv-chk-s').checked;
+      if (!hr && !hs) return alert('Selecciona al menos una acción.');
+      const mr = hr ? getModo('fv-mr') : null;
+      const ms = hs ? getModo('fv-ms') : null;
+      if (hr && !mr) return alert('Indica si la reconexión es inmediata o programada.');
+      if (hs && !ms) return alert('Indica si la suspensión es inmediata o programada.');
+      const frRaw = mr === 'programada' ? q('fv-fr').value : null;
+      const fsRaw = ms === 'programada' ? q('fv-fs').value : null;
+      if (mr === 'programada' && !frRaw) return alert('Selecciona la fecha de reconexión.');
+      if (ms === 'programada' && !fsRaw) return alert('Selecciona la fecha de suspensión.');
+
+      const frFmt = fvFmtFecha(frRaw);
+      const fsFmt = fvFmtFecha(fsRaw);
+      const esCliente = canal !== 'onlycable';
+      const cod = fvObtenerCodCliente();
+      const emailParams = { cod, canal, dato, hr, hs, mr, ms, frFmt, fsFmt, frRaw, fsRaw };
+
+      // ── CASO A: 2 programadas → 2 incidencias ─────────────
+      if (hr && hs && mr === 'programada' && ms === 'programada') {
+        const dr = buildDescSimple('r', frFmt, dato);
+        const ds = buildDescSimple('s', fsFmt, dato);
+
+        fvAplicarCampos({ tipoTrabajo: 19, estado: 1, fecha: frFmt });
+        pegarTexto(dr);
+        feedbackGen();
+
+        if (cod) {
+          const key = `recall_fv_${Date.now()}`;
+          localStorage.setItem(key, JSON.stringify({
+            tipoTrabajo: 32, estado: 1, fecha: fsFmt, descripcion: ds
+          }));
+          const url = `${location.origin}/gosbilling/user/incidencias/ma-incidencias.xhtml?cod_cliente=${cod}&recall_fv=${key}`;
+          setTimeout(() => fvAbrirPestana(url), 600);
+        } else {
+          console.warn('[FV] No se pudo obtener código de cliente para segunda pestaña.');
+        }
+
+        if (esCliente && cod) {
+          const email = fvBuildEmail(emailParams);
+          setTimeout(() => fvAbrirCorreo(email), 900);
+        }
+        return;
+      } // ── fin CASO A ──
+
+      // ── CASO B: 1 incidencia ──────────────────────────────
+      const desc   = buildDesc({ hr, hs, mr, ms, frFmt, fsFmt, dato });
+      const tipo   = mr === 'programada' ? 19 : (ms === 'programada' ? 32 : 19);
+      const estado = (mr === 'programada' || ms === 'programada') ? 1 : 2;
+      const fecha  = mr === 'programada' ? frFmt : (ms === 'programada' ? fsFmt : null);
+
+      fvAplicarCampos({ tipoTrabajo: tipo, estado, fecha });
+      pegarTexto(desc);
+      feedbackGen();
+
+      if (esCliente && cod) {
+        const email = fvBuildEmail(emailParams);
+        setTimeout(() => fvAbrirCorreo(email), 400);
+      }
+
+    }); // ── fin fv-gen listener
+
+  } // ── fin render
+}); // ── fin Flujos.registrar
+  
 /**************************************************************************
 FORZAR RENDERIZADO
 **************************************************************************/
