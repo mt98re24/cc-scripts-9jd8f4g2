@@ -272,3 +272,98 @@
       return `
         <tr>
           <td>${formatDate(fecha)}</td>
+          <td>${fmtGB(bytesToGB(asc))}</td>
+          <td>${fmtGB(bytesToGB(desc))}</td>
+          <td style="color:#00b09b;font-weight:600;">${fmtGB(total)}</td>
+        </tr>`;
+    }).join('');
+
+    const panel = document.createElement('div');
+    panel.id = 'roaming-panel';
+    panel.innerHTML = `
+      <div id="roaming-header">
+        <span>Roaming UE &mdash; Datos</span>
+        <div class="roaming-header-btns">
+          <button id="roaming-minimize" title="Minimizar">&#8211;</button>
+          <button id="roaming-close" title="Cerrar">&times;</button>
+        </div>
+      </div>
+      <div id="roaming-body">
+        <div class="roaming-stat-label">Consumo total</div>
+        <div>
+          <span class="roaming-stat-value">${fmtGB(totalGB)}</span>
+          <span class="roaming-stat-unit">GB</span>
+        </div>
+        <div class="roaming-meta">${rowCount} registros &middot; ${diasOrdenados.length} día${diasOrdenados.length !== 1 ? 's' : ''}</div>
+
+        <hr class="roaming-divider">
+
+        <div class="roaming-actions">
+          <button class="roaming-btn" id="roaming-toggle-detail">Ver detalle</button>
+          <button class="roaming-btn" id="roaming-recalc">Recalcular</button>
+        </div>
+
+        <div id="roaming-detail">
+          <table>
+            <thead>
+              <tr>
+                <th>Día</th>
+                <th>Asc. (GB)</th>
+                <th>Desc. (GB)</th>
+                <th>Total (GB)</th>
+              </tr>
+            </thead>
+            <tbody>${filasDetalle}</tbody>
+            <tfoot>
+              <tr>
+                <td>Total</td>
+                <td>${fmtGB(bytesToGB(totalAsc))}</td>
+                <td>${fmtGB(bytesToGB(totalDesc))}</td>
+                <td>${fmtGB(totalGB)}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(panel);
+
+    document.getElementById('roaming-close').addEventListener('click', () => panel.remove());
+
+    document.getElementById('roaming-minimize').addEventListener('click', () => {
+      const minimized = panel.classList.toggle('minimized');
+      document.getElementById('roaming-minimize').innerHTML = minimized ? '&#9633;' : '&#8211;';
+    });
+
+    document.getElementById('roaming-toggle-detail').addEventListener('click', () => {
+      const detail = document.getElementById('roaming-detail');
+      const visible = detail.classList.toggle('visible');
+      document.getElementById('roaming-toggle-detail').textContent = visible ? 'Ocultar detalle' : 'Ver detalle';
+    });
+
+    document.getElementById('roaming-recalc').addEventListener('click', () => {
+      const table = document.getElementById('cdrTable');
+      if (table) calcularConsumo(table);
+    });
+  }
+
+  const observer = new MutationObserver(() => {
+    const table = document.getElementById('cdrTable');
+    if (table && !table.dataset.roamingProcessed) {
+      table.dataset.roamingProcessed = 'true';
+      calcularConsumo(table);
+
+      const tableObserver = new MutationObserver(() => {
+        if (!document.getElementById('cdrTable')) {
+          tableObserver.disconnect();
+          document.getElementById('roaming-panel')?.remove();
+        }
+      });
+      tableObserver.observe(document.body, { childList: true, subtree: true });
+    }
+  });
+
+  observer.observe(document.body, { childList: true, subtree: true });
+
+})();
