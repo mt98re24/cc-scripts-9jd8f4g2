@@ -1,0 +1,274 @@
+// ==UserScript==
+// @name         Consumo Roaming UE - CDRs
+// @version      2.2
+// @description  Calcula el consumo en Roaming UE Datos a partir de la tabla de CDRs
+// @match        https://masmovil.my.site.com/cableOperadores*
+// @grant        none
+// @run-at       document-idle
+// ==/UserScript==
+
+(function () {
+  'use strict';
+
+  const COL_DETALLE_DESTINO    = 10;
+  const COL_ENLACE_DESCENDENTE = 14;
+  const COL_ENLACE_ASCENDENTE  = 15;
+  const COL_FECHA              = 6;
+  const ROAMING_LABEL          = 'Roaming UE Datos';
+
+  function injectStyles() {
+    if (document.getElementById('roaming-styles')) return;
+    const style = document.createElement('style');
+    style.id = 'roaming-styles';
+    style.textContent = `
+      #roaming-panel * {
+        box-sizing: border-box;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+      }
+      #roaming-panel {
+        position: fixed;
+        bottom: 24px;
+        right: 24px;
+        z-index: 99999;
+        background: #ffffff;
+        color: #1a1a2e;
+        font-size: 13px;
+        border-radius: 10px;
+        box-shadow: 0 4px 24px rgba(0,0,0,0.13);
+        min-width: 280px;
+        max-width: 520px;
+        overflow: hidden;
+        border: 1px solid #e2e8f0;
+        transition: all 0.2s ease;
+      }
+      #roaming-panel.minimized #roaming-body {
+        display: none;
+      }
+      #roaming-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 11px 16px;
+        background: #f8fafc;
+        border-bottom: 1px solid #e2e8f0;
+        user-select: none;
+      }
+      #roaming-header span {
+        font-weight: 600;
+        font-size: 12px;
+        letter-spacing: 0.06em;
+        color: #64748b;
+        text-transform: uppercase;
+      }
+      .roaming-header-btns {
+        display: flex;
+        gap: 5px;
+      }
+      .roaming-header-btns button {
+        background: #e2e8f0;
+        border: none;
+        color: #64748b;
+        width: 22px;
+        height: 22px;
+        border-radius: 5px;
+        cursor: pointer;
+        font-size: 14px;
+        line-height: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: background 0.15s, color 0.15s;
+      }
+      .roaming-header-btns button:hover {
+        background: #cbd5e1;
+        color: #1e293b;
+      }
+      #roaming-body {
+        padding: 16px;
+      }
+      .roaming-stat-label {
+        color: #94a3b8;
+        font-size: 11px;
+        font-weight: 500;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        margin-bottom: 4px;
+      }
+      .roaming-stat-value {
+        font-size: 28px;
+        font-weight: 700;
+        color: #00b09b;
+        letter-spacing: -0.02em;
+      }
+      .roaming-stat-unit {
+        font-size: 14px;
+        color: #94a3b8;
+        margin-left: 3px;
+        font-weight: 400;
+      }
+      .roaming-meta {
+        color: #94a3b8;
+        font-size: 11px;
+        margin-top: 5px;
+      }
+      .roaming-divider {
+        border: none;
+        border-top: 1px solid #f1f5f9;
+        margin: 14px 0;
+      }
+      .roaming-actions {
+        display: flex;
+        gap: 8px;
+      }
+      .roaming-btn {
+        flex: 1;
+        padding: 8px 0;
+        border: none;
+        border-radius: 6px;
+        font-size: 12px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: background 0.15s, opacity 0.15s;
+        letter-spacing: 0.02em;
+      }
+      #roaming-toggle-detail {
+        background: #00b09b;
+        color: #ffffff;
+      }
+      #roaming-toggle-detail:hover {
+        background: #009688;
+      }
+      #roaming-recalc {
+        background: #f1f5f9;
+        color: #475569;
+        border: 1px solid #e2e8f0;
+      }
+      #roaming-recalc:hover {
+        background: #e2e8f0;
+        color: #1e293b;
+      }
+      #roaming-detail {
+        display: none;
+        margin-top: 14px;
+        border-radius: 7px;
+        overflow: hidden;
+        border: 1px solid #e2e8f0;
+      }
+      #roaming-detail.visible {
+        display: block;
+      }
+      #roaming-detail table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 12px;
+      }
+      #roaming-detail thead tr {
+        background: #f8fafc;
+      }
+      #roaming-detail thead th {
+        padding: 7px 10px;
+        text-align: right;
+        color: #94a3b8;
+        font-weight: 600;
+        letter-spacing: 0.05em;
+        font-size: 10px;
+        text-transform: uppercase;
+        border-bottom: 1px solid #e2e8f0;
+      }
+      #roaming-detail thead th:first-child {
+        text-align: left;
+      }
+      #roaming-detail tbody tr {
+        border-top: 1px solid #f1f5f9;
+        transition: background 0.1s;
+      }
+      #roaming-detail tbody tr:hover {
+        background: #f8fafc;
+      }
+      #roaming-detail tbody td {
+        padding: 6px 10px;
+        text-align: right;
+        color: #334155;
+      }
+      #roaming-detail tbody td:first-child {
+        text-align: left;
+        color: #475569;
+        font-weight: 500;
+      }
+      #roaming-detail tfoot tr {
+        background: #f8fafc;
+        border-top: 1px solid #e2e8f0;
+      }
+      #roaming-detail tfoot td {
+        padding: 7px 10px;
+        text-align: right;
+        color: #00b09b;
+        font-weight: 700;
+        font-size: 12px;
+      }
+      #roaming-detail tfoot td:first-child {
+        text-align: left;
+        color: #94a3b8;
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+      }
+    `;
+    (document.head || document.documentElement).appendChild(style);
+  }
+
+  function bytesToGB(bytes) {
+    return bytes / 1024 / 1024 / 1024;
+  }
+
+  function parseCell(td) {
+    if (!td) return 0;
+    const val = parseFloat(td.textContent.trim().replace(',', '.'));
+    return isNaN(val) ? 0 : val;
+  }
+
+  function formatDate(raw) {
+    if (!raw || raw.length !== 8) return raw;
+    return `${raw.slice(6, 8)}/${raw.slice(4, 6)}/${raw.slice(0, 4)}`;
+  }
+
+  function fmtGB(val) {
+    return val.toFixed(2);
+  }
+
+  function calcularConsumo(table) {
+    const rows = table.querySelectorAll('tbody tr');
+    const porDia = {};
+    let totalDesc = 0, totalAsc = 0, rowCount = 0;
+
+    rows.forEach(row => {
+      const cells = row.querySelectorAll('td');
+      const detalle = cells[COL_DETALLE_DESTINO]?.textContent.trim();
+      if (detalle !== ROAMING_LABEL) return;
+
+      const fecha = cells[COL_FECHA]?.textContent.trim() || 'Sin fecha';
+      const desc  = parseCell(cells[COL_ENLACE_DESCENDENTE]);
+      const asc   = parseCell(cells[COL_ENLACE_ASCENDENTE]);
+
+      if (!porDia[fecha]) porDia[fecha] = { desc: 0, asc: 0 };
+      porDia[fecha].desc += desc;
+      porDia[fecha].asc  += asc;
+      totalDesc += desc;
+      totalAsc  += asc;
+      rowCount++;
+    });
+
+    mostrarResultado({ totalGB: bytesToGB(totalDesc + totalAsc), rowCount, porDia, totalDesc, totalAsc });
+  }
+
+  function mostrarResultado({ totalGB, rowCount, porDia, totalDesc, totalAsc }) {
+    injectStyles();
+    document.getElementById('roaming-panel')?.remove();
+
+    const diasOrdenados = Object.keys(porDia).sort();
+    const filasDetalle = diasOrdenados.map(fecha => {
+      const { desc, asc } = porDia[fecha];
+      const total = bytesToGB(desc + asc);
+      return `
+        <tr>
+          <td>${formatDate(fecha)}</td>
