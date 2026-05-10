@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Consumo Roaming UE - CDRs
-// @version      2.2
+// @version      1.0
 // @description  Calcula el consumo en Roaming UE Datos a partir de la tabla de CDRs
 // @match        https://masmovil.my.site.com/cableOperadores*
 // @grant        none
