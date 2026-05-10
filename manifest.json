@@ -78,6 +78,12 @@
       "match": [
         { "type": "url", "value": "https://gossan.onlycable.es:8083/gosbilling/user/incidencias/ma-incidencias.xhtml" }
       ]
+    },
+     {
+      "file": "8g6k0d5d.js",
+      "match": [
+        { "type": "url", "value": "https://masmovil.my.site.com/cableOperadores/" }
+      ]
     }
   ]
 }
