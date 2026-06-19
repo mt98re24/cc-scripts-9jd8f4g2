@@ -1,5 +1,5 @@
 {
-  "version": "2026-05-11-01",
+  "version": "2026-06-19-01",
   "scripts": [
     {
       "file": "x82c9e4a.js",
@@ -8,7 +8,7 @@
       ]
     },
     {
-      "file": "d5s6s5d.js",
+      "file": "d5s6s5d.jsss",
       "match": [
         { "type": "url", "value": "https://gossan.onlycable.es:8083/gosbilling/user/incidencias/ma-incidencias.xhtml" }
       ]
