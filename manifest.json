@@ -1,5 +1,5 @@
 {
-  "version": "2026-06-19-01",
+  "version": "2026-06-25-01",
   "scripts": [
     {
       "file": "x82c9e4a.js",
@@ -83,6 +83,12 @@
       "file": "5c6v5d2c.js",
       "match": [
         { "type": "url", "value": "https://masmovil.my.site.com/cableOperadores/" }
+      ]
+       },
+     {
+      "file": "7gd7b7g7.js",
+      "match": [
+        { "type": "url", "value": "https://amr.onlycable.es/llamadas_perdidas" }
       ]
     }
   ]
