@@ -2,7 +2,7 @@
 // @name         Copiar WD junto a FIBRABLANCA (NEW 06/2026)
 // @namespace    http://tampermonkey.net/
 // @version      1.3
-// @description  Inserta un botón junto a la tipología FIBRABLANCA que copia el último código WD_ de las observaciones si no tiene varios
+// @description  Inserta un botón junto a la tipología FIBRABLANCA que copia el último código WD_ de las observaciones
 // @author       Tú
 // @match        https://gossan.onlycable.es:8083/gosbilling/user/clientes/servicios-clientes.xhtml?cod_cliente=*
 // @grant        GM_setClipboard
@@ -96,8 +96,9 @@
     if (wdsUnicos.length === 0) return;
 
     const esVarios  = wdsUnicos.length > 1;
-    const labelText = esVarios ? 'Varios WD, ver en Observaciones' : wdsUnicos[0];
-
+    const labelText = esVarios
+      ? '⚠ ¡Varios WD! Revisa en Observaciones y asegúrate de seleccionar el correcto'
+      : wdsUnicos[0];
     const box = document.createElement('span');
     box.className = 'wd-copy-btn';
     box.textContent = labelText;
@@ -105,9 +106,11 @@
     box.style.padding      = '2px 8px';
     box.style.fontSize     = '12px';
     box.style.lineHeight   = '1.6';
-    box.style.border       = '1px solid #888';
+    box.style.border       = esVarios ? '1px solid #d9822b' : '1px solid #888';
     box.style.borderRadius = '6px';
-    box.style.background   = '#fff';
+    box.style.background   = esVarios ? '#fff3e0' : '#fff';
+    box.style.color        = esVarios ? '#b45309' : 'inherit';
+    box.style.fontWeight   = esVarios ? '600' : 'normal';
     box.style.display      = 'inline-block';
 
     if (!esVarios) {
