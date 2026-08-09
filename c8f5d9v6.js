@@ -2,7 +2,7 @@
 // @name         Copiar WD junto a FIBRABLANCA (NEW 06/2026)
 // @namespace    http://tampermonkey.net/
 // @version      1.3
-// @description  Inserta un botón junto a la tipología FIBRABLANCA que copia el último código WD_ de las observaciones
+// @description  Inserta un botón junto a la tipología FIBRABLANCA que copia el último código WD_ de las observaciones si no tiene varios
 // @author       Tú
 // @match        https://gossan.onlycable.es:8083/gosbilling/user/clientes/servicios-clientes.xhtml?cod_cliente=*
 // @grant        GM_setClipboard
