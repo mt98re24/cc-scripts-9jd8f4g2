@@ -5018,7 +5018,7 @@ function fvAbrirCorreo({ asunto, cuerpo }) {
       document.querySelector('form[id*="formIncidencia"] textarea') ||
       document.querySelector('textarea[role="textbox"]');
     if (!campo) return;
-    const agente = window.crmAgente || 'MusinT.';
+    const agente = window.crmAgente || 'Agente.';
     const ahora  = new Date();
     const f = ahora.toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric' });
     const h = ahora.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
