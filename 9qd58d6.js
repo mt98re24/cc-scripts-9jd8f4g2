@@ -116,6 +116,16 @@ btnMin.onclick = () => {
 };
 
 btnMax.onclick = () => {
+  // Si el panel está minimizado, primero se restaura el cuerpo Y la
+  // altura — si no, el panel "recuerda" la altura mínima de minimizado
+  // como si fuera la normal, y al desampliar vuelve a quedarse pequeño.
+  if (minimized) {
+    const body = document.getElementById('asistente-body');
+    body.style.display = 'flex';
+    panel.style.height = '440px';
+    minimized = false;
+  }
+
   const vw = window.innerWidth;
   const vh = window.innerHeight;
   if (!savedRect) {
@@ -474,7 +484,10 @@ let tipoAbonadoActual = 'administrativo';
 // 🔹 Detección del tipo de abonado
 function detectarTipoAbonado(texto) {
   if (!texto) return 'administrativo';
-  const t = texto.trim().toLowerCase();
+  // Gossan antepone "EN BAJA - " al abonado cuando el servicio está de baja;
+  // se descarta ese prefijo antes de detectar, si no ningún abonado de baja
+  // se reconoce (cae siempre a "administrativo").
+  const t = texto.trim().toLowerCase().replace(/^en\s+baja\s*-\s*/, '');
   if (t.startsWith('int') || t.startsWith('internet')) return 'internet';
   if (t.startsWith('tv') || t.startsWith('television')) return 'television';
   if (t.startsWith('zapi')) return 'zapi';
@@ -2541,18 +2554,192 @@ Flujos.registrar({
 });
 
 /**************************************************************************
- * 📶 FLUJO 6: INCIDENCIA SERVICIO
+ * 📶 FLUJO: INCIDENCIA SERVICIO (MÓVIL) — PROPUESTA REDISEÑADA
+ * Sustituye por completo al Flujos.registrar({ id: 'incidenciaServicio', ... })
+ * original. Todo lo marcado "sin cambios" respeta el comportamiento y los
+ * ids de campos del flujo original para no romper nada que ya funcionaba.
  **************************************************************************/
 
 Flujos.registrar({
   id: 'incidenciaServicio',
-  nombre: '📶 Incidencia servicio',
+  nombre: '⚠️ Incidencia servicio',
   tipos: ['movil'],
   categorias: ['nueva', 'actualizar'],
   render: (contenedor, pegarTexto) => {
 
+    /************************************************************************
+     * CONSTANTES DE DISEÑO — motivos, zona, textos de estado
+     ************************************************************************/
+    const MOTIVOS = [
+      'Sin servicio (voz/datos)',
+      'Problema llamadas entrantes',
+      'Problema llamadas salientes',
+      'Sin voz',
+      'Lentitud de los datos móviles',
+      'Sin datos móviles',
+      'Cobertura',
+      'SMS',
+      'Otro'
+    ];
+
+    const INFO_MOTIVO = {
+      'Cobertura': `
+        <b>Recordatorio rápido — Cobertura</b>
+        <ul style="margin:6px 0 0 18px;padding:0;">
+          <li>Incidencia de cobertura = el fallo depende de la ubicación (en esa zona no funciona, en otras sí). Si pasa en cualquier sitio, no es cobertura.</li>
+          <li>Pregunta siempre por histórico de funcionamiento.</li>
+          <li>Si toca escalar al proveedor: adjunta ejemplos de llamada de las últimas 24h (llamante, llamado, fecha/hora, ubicación, tipo de error). Sin ejemplos, el ticket se alarga.</li>
+        </ul>`
+    };
+
+    function opcionesMotivo() {
+      return MOTIVOS.map(m => `<option>${m}</option>`).join('');
+    }
+
+    function opcionesEstado() {
+      return `
+        <option value="">Seleccione estado</option>
+        <option value="inicial">INICIAL</option>
+        <option value="pte_cliente">PENDIENTE CLIENTE</option>
+        <option value="pte_proveedor">PENDIENTE PROVEEDOR</option>
+        <option value="pte_atc">PENDIENTE ATC</option>
+        <option value="pte_interno">PENDIENTE INTERNO</option>
+        <option value="final">FINAL</option>`;
+    }
+
+    /************************************************************************
+     * HTML — BLOQUE NUEVA
+     ************************************************************************/
+    const htmlLineasNueva = `
+      <label><b>Línea afectada:</b></label><br>
+      <input type="text" id="lineaPrincipalNueva" readonly style="width:100%;box-sizing:border-box;margin-bottom:6px;background:#f4f4f4;">
+      <div id="lineasExtraNueva"></div>
+      <button type="button" id="btnAddLineaNueva" style="background:none;border:1px solid #007bff;color:#007bff;border-radius:6px;padding:4px 8px;cursor:pointer;font-size:12px;margin-bottom:10px;">+ Añadir línea</button>
+    `;
+
+    const htmlEstadoBloque = (suf) => `
+      <label><b>Estado:</b></label><br>
+      <select id="estado${suf}" style="width:100%;margin-bottom:8px;">
+        ${opcionesEstado()}
+      </select>
+
+      <!-- Sub PENDIENTE CLIENTE -->
+      <div id="subCliente${suf}" style="display:none;margin-bottom:10px;padding:8px;border:1px solid #cce0ff;border-radius:6px;background:#f0f7ff;">
+        <label><b>Situación:</b></label><br>
+        <select id="situacionCliente${suf}" style="width:100%;margin-bottom:8px;">
+          <option value="">Seleccione...</option>
+          <option value="no_localizado">No localizado</option>
+          <option value="pendiente_pruebas">Pendiente pruebas</option>
+        </select>
+
+        <!-- No localizado -->
+        <div id="bloqueNoLoc${suf}" style="display:none;">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:6px;">
+            <input type="checkbox" id="waNoLoc${suf}"> Se envía WhatsApp
+          </label>
+          <div id="bloqueWaNumNoLoc${suf}" style="display:none;margin-bottom:8px;">
+            <label>Número:</label><br>
+            <input type="text" id="waNumNoLoc${suf}" placeholder="Ej: 612345678" style="width:100%;box-sizing:border-box;">
+          </div>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:6px;">
+            <input type="checkbox" id="citarNoLoc${suf}"> Citar (volver a llamar)
+          </label>
+          <div id="bloqueCitaNoLoc${suf}" style="display:none;margin-bottom:8px;">
+            <label>Fecha:</label>
+            <input type="date" id="citaFechaNoLoc${suf}" style="margin-right:6px;">
+            <label>Hora:</label>
+            <input type="time" id="citaHoraNoLoc${suf}">
+          </div>
+        </div>
+
+        <!-- Pendiente pruebas -->
+        <div id="bloquePruebas${suf}" style="display:none;">
+          <label><b>Canal:</b></label><br>
+          <select id="canalPruebas${suf}" style="width:100%;margin-bottom:8px;">
+            <option value="">Seleccione...</option>
+            <option value="cita">Cita (llamar de nuevo)</option>
+            <option value="whatsapp">WhatsApp</option>
+          </select>
+
+          <div id="bloqueCitaPruebas${suf}" style="display:none;margin-bottom:8px;">
+            <label>Fecha:</label>
+            <input type="date" id="citaFechaPruebas${suf}" style="margin-right:6px;">
+            <label>Hora:</label>
+            <input type="time" id="citaHoraPruebas${suf}">
+          </div>
+
+          <div id="bloqueWaPruebas${suf}" style="display:none;margin-bottom:8px;">
+            <label>Número:</label><br>
+            <input type="text" id="waNumPruebas${suf}" placeholder="Ej: 612345678" style="width:100%;box-sizing:border-box;">
+          </div>
+        </div>
+      </div>
+
+      <!-- Sub PENDIENTE PROVEEDOR -->
+      <div id="subProveedor${suf}" style="display:none;margin-bottom:10px;padding:8px;border:1px solid #ffd6a5;border-radius:6px;background:#fff8ee;">
+        <label><b>Tipo:</b></label><br>
+        <select id="tipoProveedor${suf}" style="width:100%;margin-bottom:8px;">
+          <option value="esperando">Esperando respuesta</option>
+          <option value="masiva">Afectado por incidencia masiva</option>
+        </select>
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:6px;">
+          <input type="checkbox" id="reclamaProveedor${suf}"> Se reclama a proveedor
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:8px;">
+          <input type="checkbox" id="escalaProveedor${suf}"> Se escala
+        </label>
+        ${suf === 'Nueva' ? `
+        <div id="bloqueTicketProveedor${suf}">
+          <label><b>Nº ticket proveedor:</b></label><br>
+          <input type="text" id="ticketProveedor${suf}" placeholder="Ej: TK-98765" style="width:100%;margin-bottom:8px;box-sizing:border-box;">
+        </div>` : `
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:6px;">
+          <input type="checkbox" id="cbTicket${suf}"> Añadir ticket operador
+        </label>
+        <div id="bloqueTicketProveedor${suf}" style="display:none;">
+          <label><b>Nº ticket proveedor:</b></label><br>
+          <input type="text" id="ticketProveedor${suf}" placeholder="Ej: TK-98765" style="width:100%;margin-bottom:8px;box-sizing:border-box;">
+        </div>`}
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:6px;">
+          <input type="checkbox" id="citarProveedor${suf}"> Cita (revisar el caso)
+        </label>
+        <div id="bloqueCitaProveedor${suf}" style="display:none;margin-bottom:4px;">
+          <label>Fecha:</label>
+          <input type="date" id="citaFechaProveedor${suf}" style="margin-right:6px;">
+          <label>Hora:</label>
+          <input type="time" id="citaHoraProveedor${suf}">
+        </div>
+      </div>
+
+      <!-- Sub PENDIENTE ATC / INTERNO -->
+      <div id="subAtcInterno${suf}" style="display:none;margin-bottom:10px;padding:8px;border:1px solid #ddd;border-radius:6px;background:#fafafa;">
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:6px;">
+          <input type="checkbox" id="citarAtcInterno${suf}"> Cita (revisar el caso)
+        </label>
+        <div id="bloqueCitaAtcInterno${suf}" style="display:none;">
+          <label>Fecha:</label>
+          <input type="date" id="citaFechaAtcInterno${suf}" style="margin-right:6px;">
+          <label>Hora:</label>
+          <input type="time" id="citaHoraAtcInterno${suf}">
+        </div>
+      </div>
+
+      <!-- Sub FINAL -->
+      <div id="subFinal${suf}" style="display:none;margin-bottom:10px;padding:8px;border:1px solid #b9e4c9;border-radius:6px;background:#f2fbf5;">
+        <label><b>Motivo de cierre:</b></label><br>
+        <select id="motivoFinal${suf}" style="width:100%;">
+          <option value="">Seleccione...</option>
+          <option value="solucionada">Solucionada</option>
+          <option value="no_localizado_48h">No localizado tras 48h</option>
+          <option value="incidencia_masiva">Cierre por incidencia masiva</option>
+          <option value="pendiente_comprobacion">Pendiente comprobación</option>
+          <option value="sin_problema">No tiene problemas con el servicio</option>
+        </select>
+      </div>
+    `;
+
     contenedor.innerHTML = `
-      <h3>📶 Incidencia servicio</h3>
+      <h3>⚠️ Incidencia servicio</h3>
 
       <label><b>Tipo de gestión:</b></label><br>
       <select id="tipoGestion" style="width:100%;margin-bottom:10px;">
@@ -2565,6 +2752,8 @@ Flujos.registrar({
            NUEVA INCIDENCIA
       ══════════════════════════════════════════ -->
       <div id="bloqueNueva" style="display:none;">
+
+        ${htmlLineasNueva}
 
         <label style="display:flex;align-items:center;gap:8px;margin-bottom:8px;cursor:pointer;">
           <input type="checkbox" id="esHija">
@@ -2584,32 +2773,28 @@ Flujos.registrar({
           <option>PTV</option>
         </select>
 
-        <label><b>Motivo incidencia:</b></label><br>
-        <select id="motivoInc" style="width:100%;margin-bottom:10px;">
-          <option value="">Seleccione motivo</option>
-          <optgroup label="España">
-            <option>Sin servicio (voz/datos)</option>
-            <option>Sin voz</option>
-            <option>Problema llamadas entrantes</option>
-            <option>Problema llamadas salientes</option>
-            <option>Sin datos móviles</option>
-            <option>Lentitud datos móviles</option>
-            <option>Cobertura</option>
-            <option>Otro</option>
-          </optgroup>
-          <optgroup label="Roaming">
-            <option>Sin servicio (voz/datos)</option>
-            <option>Sin voz</option>
-            <option>Problema llamadas entrantes</option>
-            <option>Problema llamadas salientes</option>
-            <option>Sin datos móviles</option>
-            <option>Lentitud datos móviles</option>
-            <option>Cobertura</option>
-            <option>Otro</option>
-          </optgroup>
+        <label><b>Zona:</b></label><br>
+        <select id="zonaNueva" style="width:100%;margin-bottom:10px;">
+          <option value="">Seleccione zona</option>
+          <option value="España">España</option>
+          <option value="Roaming">Roaming</option>
         </select>
 
-        <!-- Datos agotados Nueva -->
+        <label><b>Motivo incidencia:</b></label><br>
+        <select id="motivoInc" style="width:100%;margin-bottom:6px;">
+          <option value="">Seleccione motivo</option>
+          ${opcionesMotivo()}
+        </select>
+
+        <button type="button" id="btnInfoMotivoNueva" style="display:none;background:none;border:1px solid #007bff;color:#007bff;border-radius:6px;padding:4px 8px;cursor:pointer;font-size:12px;margin-bottom:8px;">📘 Mostrar información</button>
+        <div id="infoMotivoNueva" style="display:none;background:#eaf3ff;border:1px solid #bcd3ff;padding:10px;border-radius:8px;margin-bottom:10px;font-size:13px;"></div>
+
+        <div id="bloqueDireccionNueva" style="display:none;margin-bottom:10px;">
+          <label><b>Dirección:</b></label><br>
+          <input type="text" id="direccionNueva" placeholder="C/ Ejemplo, 5. 30310, Cartagena" style="width:100%;box-sizing:border-box;">
+        </div>
+
+        <!-- Datos agotados Nueva (sin cambios) -->
         <div id="bloqueDatosAgotadosNueva" style="display:none;margin-bottom:10px;padding:8px;border:1px solid #d0e8d0;border-radius:6px;background:#f4fff4;">
           <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:8px;">
             <input type="checkbox" id="datosAgotadosNueva"> <b>Datos agotados</b>
@@ -2641,63 +2826,23 @@ Flujos.registrar({
         <label><b>Pruebas realizadas <span style="font-weight:normal;">(opcional)</span>:</b></label><br>
         <textarea id="pruebasRealizadas" rows="2" style="width:100%;margin-bottom:10px;box-sizing:border-box;"></textarea>
 
-        <label><b>Estado:</b></label><br>
-        <select id="estadoNueva" style="width:100%;margin-bottom:8px;">
-          <option value="">Seleccione estado</option>
-          <option value="pte_cliente">PTE CLIENTE</option>
-          <option value="pte_proveedor">PTE PROVEEDOR</option>
-          <option value="pte_atc">PTE ATC</option>
-          <option value="pte_interno">PTE INTERNO</option>
-          <option value="resuelta">RESUELTA</option>
-        </select>
+        ${htmlEstadoBloque('Nueva')}
 
-        <!-- Sub PTE CLIENTE Nueva -->
-        <div id="subClienteNueva" style="display:none;margin-bottom:10px;padding:8px;border:1px solid #cce0ff;border-radius:6px;background:#f0f7ff;">
-          <label><b>Situación:</b></label><br>
-          <select id="subEstClienteNueva" style="width:100%;margin-bottom:8px;">
-            <option value="">Seleccione...</option>
-            <option value="avisara">Avisará cuando pueda</option>
-            <option value="no_localizado">No localizado</option>
-            <option value="citado">Citado</option>
-          </select>
-          <div id="bloqueAvisaraNueva" style="display:none;">
-            <label><b>Pruebas:</b></label><br>
-            <select id="pruebasIndNueva" style="width:100%;margin-bottom:4px;">
-              <option value="">Seleccione...</option>
-              <option value="indicadas">Pruebas indicadas</option>
-              <option value="no_indicadas">Pruebas no indicadas</option>
-            </select>
-          </div>
-          <div id="bloqueNoLocNueva" style="display:none;">
-            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
-              <input type="checkbox" id="waEnviadoNueva"> Se envía WhatsApp
-            </label>
-          </div>
-        </div>
-
-        <!-- Sub PTE PROVEEDOR Nueva -->
-        <div id="subProveedorNueva" style="display:none;margin-bottom:10px;padding:8px;border:1px solid #ffd6a5;border-radius:6px;background:#fff8ee;">
-          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:6px;">
-            <input type="checkbox" id="seReclamaNueva"> Se reclama
-          </label>
-          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:6px;">
-            <input type="checkbox" id="escN2Nueva"> Escalado a N2 operador
-          </label>
-          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:8px;">
-            <input type="checkbox" id="escCoordNueva"> Escalado a coordinador
-          </label>
-          <label><b>Nº ticket operador:</b></label><br>
-          <input type="text" id="ticketProveedorNueva" placeholder="Ej: TK-98765" style="width:100%;box-sizing:border-box;">
-        </div>
-
-        <div id="bloquePrioridadNueva" style="display:none;margin-bottom:12px;">
+        <div id="bloquePrioridadNueva" style="display:none;margin:12px 0;">
           <label><b>Prioridad:</b></label><br>
           <select id="prioridadNueva" style="width:100%;">
             <option value="">Seleccione prioridad</option>
-            <option value="extrema">🔴 Extrema</option>
-            <option value="alta">🟠 Alta</option>
-            <option value="baja">🟢 Baja</option>
+            <option value="ALTA">🔴 Alta</option>
+            <option value="MEDIA">🟠 Media</option>
+            <option value="BAJA">🟢 Baja</option>
           </select>
+        </div>
+
+        <label style="display:flex;align-items:center;gap:8px;margin-bottom:8px;cursor:pointer;">
+          <input type="checkbox" id="cbContactoNueva"> <b>Añadir número de contacto</b>
+        </label>
+        <div id="bloqueContactoNueva" style="display:none;margin-bottom:10px;">
+          <input type="text" id="telContactoNueva" placeholder="Ej: 612345678" style="width:100%;box-sizing:border-box;">
         </div>
 
         <button id="btnGenerarNueva" style="
@@ -2713,36 +2858,42 @@ Flujos.registrar({
       ══════════════════════════════════════════ -->
       <div id="bloqueActualizacion" style="display:none;">
 
+        <label style="display:flex;align-items:center;gap:8px;margin-bottom:8px;cursor:pointer;">
+          <input type="checkbox" id="cbLineasAct"> <b>Añadir líneas afectadas</b>
+        </label>
+        <div id="bloqueLineasAct" style="display:none;margin-bottom:10px;">
+          <label><b>Línea afectada:</b></label><br>
+          <input type="text" id="lineaPrincipalAct" readonly style="width:100%;box-sizing:border-box;margin-bottom:6px;background:#f4f4f4;">
+          <div id="lineasExtraAct"></div>
+          <button type="button" id="btnAddLineaAct" style="background:none;border:1px solid #007bff;color:#007bff;border-radius:6px;padding:4px 8px;cursor:pointer;font-size:12px;">+ Añadir línea</button>
+        </div>
+
         <!-- Cambiar motivo -->
         <label style="display:flex;align-items:center;gap:8px;margin-bottom:8px;cursor:pointer;">
           <input type="checkbox" id="cambiarMotivo"> <b>Cambiar motivo de incidencia</b>
         </label>
         <div id="bloqueNuevoMotivo" style="display:none;margin-bottom:10px;">
-          <select id="motivoAct" style="width:100%;margin-bottom:10px;">
-            <option value="">Seleccione motivo</option>
-            <optgroup label="España">
-              <option>Sin servicio (voz/datos)</option>
-              <option>Sin voz</option>
-              <option>Problema llamadas entrantes</option>
-              <option>Problema llamadas salientes</option>
-              <option>Sin datos móviles</option>
-              <option>Lentitud datos móviles</option>
-              <option>Cobertura</option>
-              <option>Otro</option>
-            </optgroup>
-            <optgroup label="Roaming">
-              <option>Sin servicio (voz/datos)</option>
-              <option>Sin voz</option>
-              <option>Problema llamadas entrantes</option>
-              <option>Problema llamadas salientes</option>
-              <option>Sin datos móviles</option>
-              <option>Lentitud datos móviles</option>
-              <option>Cobertura</option>
-              <option>Otro</option>
-            </optgroup>
+          <label><b>Zona:</b></label><br>
+          <select id="zonaAct" style="width:100%;margin-bottom:10px;">
+            <option value="">Seleccione zona</option>
+            <option value="España">España</option>
+            <option value="Roaming">Roaming</option>
           </select>
 
-          <!-- Datos agotados Actualización -->
+          <select id="motivoAct" style="width:100%;margin-bottom:6px;">
+            <option value="">Seleccione motivo</option>
+            ${opcionesMotivo()}
+          </select>
+
+          <button type="button" id="btnInfoMotivoAct" style="display:none;background:none;border:1px solid #007bff;color:#007bff;border-radius:6px;padding:4px 8px;cursor:pointer;font-size:12px;margin-bottom:8px;">📘 Mostrar información</button>
+          <div id="infoMotivoAct" style="display:none;background:#eaf3ff;border:1px solid #bcd3ff;padding:10px;border-radius:8px;margin-bottom:10px;font-size:13px;"></div>
+
+          <div id="bloqueDireccionAct" style="display:none;margin-bottom:10px;">
+            <label><b>Dirección:</b></label><br>
+            <input type="text" id="direccionAct" placeholder="C/ Ejemplo, 5. 30310, Cartagena" style="width:100%;box-sizing:border-box;">
+          </div>
+
+          <!-- Datos agotados Actualización (sin cambios) -->
           <div id="bloqueDatosAgotadosAct" style="display:none;margin-bottom:10px;padding:8px;border:1px solid #d0e8d0;border-radius:6px;background:#f4fff4;">
             <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:8px;">
               <input type="checkbox" id="datosAgotadosAct"> <b>Datos agotados</b>
@@ -2769,10 +2920,8 @@ Flujos.registrar({
           </div>
         </div>
 
-        <!-- Campos opcionales con checkbox -->
+        <!-- Campos opcionales con checkbox (sin cambios) -->
         <div style="margin-bottom:10px;">
-
-          <!-- Información adicional -->
           <label style="display:flex;align-items:center;gap:8px;margin-bottom:6px;cursor:pointer;">
             <input type="checkbox" id="cbInfoAct"> <b>Información adicional</b>
           </label>
@@ -2781,7 +2930,6 @@ Flujos.registrar({
               placeholder="Información adicional de la gestión..."></textarea>
           </div>
 
-          <!-- Actualización proveedor -->
           <label style="display:flex;align-items:center;gap:8px;margin-bottom:6px;cursor:pointer;">
             <input type="checkbox" id="cbActProvAct"> <b>Actualización proveedor</b>
           </label>
@@ -2790,80 +2938,34 @@ Flujos.registrar({
               placeholder="Respuesta o novedad del proveedor..."></textarea>
           </div>
 
-          <!-- Pruebas adicionales -->
           <label style="display:flex;align-items:center;gap:8px;margin-bottom:6px;cursor:pointer;">
             <input type="checkbox" id="cbPruebasAct"> <b>Pruebas adicionales</b>
           </label>
-          <div id="bloquePruebasAct" style="display:none;margin-bottom:8px;">
+          <div id="bloquePruebasAdicAct" style="display:none;margin-bottom:8px;">
             <textarea id="pruebasAct" rows="2" style="width:100%;box-sizing:border-box;"
               placeholder="Pruebas realizadas en esta gestión..."></textarea>
           </div>
         </div>
 
-        <label><b>Estado:</b></label><br>
-        <select id="estadoAct" style="width:100%;margin-bottom:8px;">
-          <option value="">Seleccione estado</option>
-          <option value="pte_cliente">PTE CLIENTE</option>
-          <option value="pte_proveedor">PTE PROVEEDOR</option>
-          <option value="pte_atc">PTE ATC</option>
-          <option value="pte_interno">PTE INTERNO</option>
-          <option value="resuelta">RESUELTA</option>
-        </select>
+        ${htmlEstadoBloque('Act')}
 
-        <!-- Sub PTE CLIENTE Actualización -->
-        <div id="subClienteAct" style="display:none;margin-bottom:10px;padding:8px;border:1px solid #cce0ff;border-radius:6px;background:#f0f7ff;">
-          <label><b>Situación:</b></label><br>
-          <select id="subEstClienteAct" style="width:100%;margin-bottom:8px;">
-            <option value="">Seleccione...</option>
-            <option value="avisara">Avisará cuando pueda</option>
-            <option value="no_localizado">No localizado</option>
-            <option value="citado">Citado</option>
-          </select>
-          <div id="bloqueAvisaraAct" style="display:none;">
-            <label><b>Pruebas:</b></label><br>
-            <select id="pruebasIndAct" style="width:100%;margin-bottom:4px;">
-              <option value="">Seleccione...</option>
-              <option value="indicadas">Pruebas indicadas</option>
-              <option value="no_indicadas">Pruebas no indicadas</option>
-            </select>
-          </div>
-          <div id="bloqueNoLocAct" style="display:none;">
-            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
-              <input type="checkbox" id="waEnviadoAct"> Se envía WhatsApp
-            </label>
-          </div>
-        </div>
-
-        <!-- Sub PTE PROVEEDOR Actualización -->
-        <div id="subProveedorAct" style="display:none;margin-bottom:10px;padding:8px;border:1px solid #ffd6a5;border-radius:6px;background:#fff8ee;">
-          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:6px;">
-            <input type="checkbox" id="seReclamaAct"> Se reclama
-          </label>
-          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:6px;">
-            <input type="checkbox" id="escN2Act"> Escalado a N2 operador
-          </label>
-          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:8px;">
-            <input type="checkbox" id="escCoordAct"> Escalado a coordinador
-          </label>
-          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-bottom:6px;">
-            <input type="checkbox" id="cbTicketProvAct"> <b>Añadir ticket operador</b>
-          </label>
-          <div id="bloqueTicketProvAct" style="display:none;">
-            <input type="text" id="ticketProveedorAct" placeholder="Ej: TK-98765" style="width:100%;box-sizing:border-box;">
-          </div>
-        </div>
-
-        <!-- Cambiar prioridad -->
-        <label style="display:flex;align-items:center;gap:8px;margin-bottom:8px;cursor:pointer;">
+        <label style="display:flex;align-items:center;gap:8px;margin:8px 0;cursor:pointer;">
           <input type="checkbox" id="cambiarPrioridad"> <b>Cambiar prioridad</b>
         </label>
         <div id="bloqueNuevaPrioridad" style="display:none;margin-bottom:12px;">
           <select id="prioridadAct" style="width:100%;">
             <option value="">Seleccione prioridad</option>
-            <option value="extrema">🔴 Extrema</option>
-            <option value="alta">🟠 Alta</option>
-            <option value="baja">🟢 Baja</option>
+            <option value="ALTA">🔴 Alta</option>
+            <option value="MEDIA">🟠 Media</option>
+            <option value="BAJA">🟢 Baja</option>
           </select>
+        </div>
+
+        <label style="display:flex;align-items:center;gap:8px;margin-bottom:8px;cursor:pointer;">
+          <input type="checkbox" id="cbContactoAct"> <b>Añadir número de contacto</b>
+        </label>
+        <div id="bloqueContactoAct" style="display:none;margin-bottom:10px;">
+          <input type="text" id="telContactoAct" placeholder="Ej: 612345678" style="width:100%;box-sizing:border-box;">
         </div>
 
         <button id="btnGenerarAct" style="
@@ -2884,12 +2986,11 @@ Flujos.registrar({
     const bloqueNueva         = q('bloqueNueva');
     const bloqueActualizacion = q('bloqueActualizacion');
 
-    // Nueva
+    // Nueva — campos sin cambios
     const esHija                   = q('esHija');
     const bloqueHija               = q('bloqueHija');
     const incMadre                 = q('incMadre');
     const operador                 = q('operador');
-    const motivoInc                = q('motivoInc');
     const bloqueDatosAgotadosNueva = q('bloqueDatosAgotadosNueva');
     const datosAgotadosNueva       = q('datosAgotadosNueva');
     const preguntasBonoNueva       = q('preguntasBonoNueva');
@@ -2898,23 +2999,25 @@ Flujos.registrar({
     const subBonoBoxNueva          = q('subBonoBoxNueva');
     const infoAdicional            = q('infoAdicional');
     const pruebasRealizadas        = q('pruebasRealizadas');
-    const estadoNueva              = q('estadoNueva');
-    const subClienteNueva          = q('subClienteNueva');
-    const subEstClienteNueva       = q('subEstClienteNueva');
-    const bloqueAvisaraNueva       = q('bloqueAvisaraNueva');
-    const pruebasIndNueva          = q('pruebasIndNueva');
-    const bloqueNoLocNueva         = q('bloqueNoLocNueva');
-    const waEnviadoNueva           = q('waEnviadoNueva');
-    const subProveedorNueva        = q('subProveedorNueva');
-    const seReclamaNueva           = q('seReclamaNueva');
-    const escN2Nueva               = q('escN2Nueva');
-    const escCoordNueva            = q('escCoordNueva');
-    const ticketProveedorNueva     = q('ticketProveedorNueva');
-    const bloquePrioridadNueva     = q('bloquePrioridadNueva');
-    const prioridadNueva           = q('prioridadNueva');
     const btnGenerarNueva          = q('btnGenerarNueva');
 
-    // Actualización
+    // Nueva — campos nuevos
+    const lineaPrincipalNueva = q('lineaPrincipalNueva');
+    const lineasExtraNueva    = q('lineasExtraNueva');
+    const btnAddLineaNueva    = q('btnAddLineaNueva');
+    const zonaNueva           = q('zonaNueva');
+    const motivoInc           = q('motivoInc');
+    const btnInfoMotivoNueva  = q('btnInfoMotivoNueva');
+    const infoMotivoNueva     = q('infoMotivoNueva');
+    const bloqueDireccionNueva = q('bloqueDireccionNueva');
+    const direccionNueva      = q('direccionNueva');
+    const bloquePrioridadNueva = q('bloquePrioridadNueva');
+    const prioridadNueva      = q('prioridadNueva');
+    const cbContactoNueva     = q('cbContactoNueva');
+    const bloqueContactoNueva = q('bloqueContactoNueva');
+    const telContactoNueva    = q('telContactoNueva');
+
+    // Actualización — campos sin cambios
     const cambiarMotivo            = q('cambiarMotivo');
     const bloqueNuevoMotivo        = q('bloqueNuevoMotivo');
     const motivoAct                = q('motivoAct');
@@ -2931,35 +3034,441 @@ Flujos.registrar({
     const bloqueActProvAct         = q('bloqueActProvAct');
     const actProvAct               = q('actProvAct');
     const cbPruebasAct             = q('cbPruebasAct');
-    const bloquePruebasAct         = q('bloquePruebasAct');
+    const bloquePruebasAct         = q('bloquePruebasAdicAct');
     const pruebasAct               = q('pruebasAct');
-    const estadoAct                = q('estadoAct');
-    const subClienteAct            = q('subClienteAct');
-    const subEstClienteAct         = q('subEstClienteAct');
-    const bloqueAvisaraAct         = q('bloqueAvisaraAct');
-    const pruebasIndAct            = q('pruebasIndAct');
-    const bloqueNoLocAct           = q('bloqueNoLocAct');
-    const waEnviadoAct             = q('waEnviadoAct');
-    const subProveedorAct          = q('subProveedorAct');
-    const seReclamaAct             = q('seReclamaAct');
-    const escN2Act                 = q('escN2Act');
-    const escCoordAct              = q('escCoordAct');
-    const cbTicketProvAct          = q('cbTicketProvAct');
-    const bloqueTicketProvAct      = q('bloqueTicketProvAct');
-    const ticketProveedorAct       = q('ticketProveedorAct');
     const cambiarPrioridad         = q('cambiarPrioridad');
     const bloqueNuevaPrioridad     = q('bloqueNuevaPrioridad');
     const prioridadAct             = q('prioridadAct');
     const btnGenerarAct            = q('btnGenerarAct');
 
+    // Actualización — campos nuevos
+    const cbLineasAct        = q('cbLineasAct');
+    const bloqueLineasAct    = q('bloqueLineasAct');
+    const lineaPrincipalAct  = q('lineaPrincipalAct');
+    const lineasExtraAct     = q('lineasExtraAct');
+    const btnAddLineaAct     = q('btnAddLineaAct');
+    const zonaAct            = q('zonaAct');
+    const btnInfoMotivoAct   = q('btnInfoMotivoAct');
+    const infoMotivoAct      = q('infoMotivoAct');
+    const bloqueDireccionAct = q('bloqueDireccionAct');
+    const direccionAct       = q('direccionAct');
+    const cbContactoAct      = q('cbContactoAct');
+    const bloqueContactoAct  = q('bloqueContactoAct');
+    const telContactoAct     = q('telContactoAct');
+
     let subflujoBono    = null;
     let subflujoBonoAct = null;
 
     /**************************************************************************
-     * HELPERS
+     * HELPERS — escritura real en Gossan (Estado y Prioridad)
+     * Reutiliza fvSetPFSelect/fvFindSelectEstado, ya definidas en el script
+     * (sección Fibraverde) y genéricas — no exclusivas de ese flujo.
+     * Solo se añade el buscador de Prioridad, que no existía.
      **************************************************************************/
+    function buscarSelectPrioridad() {
+      return [...document.querySelectorAll('select[id*="formIncidencia"]')]
+        .find(s => {
+          const opts = [...s.options];
+          return opts.some(o => o.value === '3' && o.text.trim() === 'MEDIA')
+              && opts.some(o => o.value === '2' && o.text.trim() === 'BAJA');
+        });
+    }
+
+    const ESTADO_GOSSAN = {
+      inicial: 1,
+      pte_cliente: 23,
+      pte_proveedor: 24,
+      pte_atc: 22,
+      pte_interno: 22,
+      final: 2
+    };
+
+    const PRIORIDAD_GOSSAN = { ALTA: 1, MEDIA: 3, BAJA: 2 };
+    const ASIGNACION_INCIDENCIAS_MOVILES = '191'; // INCIDENCIAS MOVILES (manual_recall.md)
+
+    function escribirEstadoYPrioridadGossan(estadoInterno, prioridadInterna) {
+      try {
+        if (typeof fvSetPFSelect !== 'function' || typeof fvFindSelectEstado !== 'function') {
+          console.warn('[incidenciaServicio] fvSetPFSelect/fvFindSelectEstado no disponibles — no se escribe en Gossan.');
+          return;
+        }
+        const valorEstado = ESTADO_GOSSAN[estadoInterno];
+        if (valorEstado !== undefined) {
+          fvSetPFSelect(fvFindSelectEstado, valorEstado);
+        }
+        if (prioridadInterna) {
+          const valorPrioridad = PRIORIDAD_GOSSAN[prioridadInterna];
+          if (valorPrioridad !== undefined) {
+            fvSetPFSelect(buscarSelectPrioridad, valorPrioridad);
+          }
+        }
+      } catch (err) {
+        console.warn('[incidenciaServicio] No se pudo escribir Estado/Prioridad en Gossan:', err);
+      }
+    }
+
+    /**************************************************************************
+     * HELPERS — escritura real en Gossan del campo Cita (fecha + hora)
+     * Contenedor con id estable "fpanelcita"; dentro, el input de fecha lleva
+     * la clase hasDatepicker (igual criterio que fvSetFecha), y el de hora
+     * es el otro input de texto de ese mismo panel.
+     **************************************************************************/
+    function buscarPanelCita() {
+      return document.querySelector('[id*="fpanelcita"]');
+    }
+
+    function buscarCampoCitaFecha() {
+      const panel = buscarPanelCita();
+      return panel ? panel.querySelector('input.hasDatepicker') : null;
+    }
+
+    function buscarCampoCitaHora() {
+      const panel = buscarPanelCita();
+      if (!panel) return null;
+      const inputs = [...panel.querySelectorAll('input[type="text"]')];
+      return inputs.find(i => !i.classList.contains('hasDatepicker')) || null;
+    }
+
+    function escribirCitaGossan(fechaISO, horaHHMM) {
+      try {
+        if (!fechaISO) return;
+        const campoFecha = buscarCampoCitaFecha();
+        const campoHora = buscarCampoCitaHora();
+        if (!campoFecha) {
+          console.warn('[incidenciaServicio] No se encontró el campo de Cita (fecha) en Gossan.');
+          return;
+        }
+        const [y, m, d] = fechaISO.split('-');
+        const fechaFmt = `${d}/${m}/${y}`;
+        campoFecha.value = fechaFmt;
+        ['input', 'change', 'blur'].forEach(ev => campoFecha.dispatchEvent(new Event(ev, { bubbles: true })));
+        try { window.jQuery && jQuery(campoFecha).datepicker('setDate', fechaFmt); } catch (_) {}
+
+        if (campoHora && horaHHMM) {
+          const horaFmt = horaHHMM.length === 5 ? `${horaHHMM}:00` : horaHHMM;
+          campoHora.value = horaFmt;
+          ['input', 'change', 'blur'].forEach(ev => campoHora.dispatchEvent(new Event(ev, { bubbles: true })));
+        }
+      } catch (err) {
+        console.warn('[incidenciaServicio] No se pudo escribir la Cita en Gossan:', err);
+      }
+    }
+
+    function extraerCitaActiva(e) {
+      if (e.est === 'pte_cliente') {
+        if (e.situacion === 'no_localizado' && e.citarNoLoc && e.citaFechaNoLoc) {
+          return { fecha: e.citaFechaNoLoc, hora: e.citaHoraNoLoc };
+        }
+        if (e.situacion === 'pendiente_pruebas' && e.canalPruebas === 'cita' && e.citaFechaPruebas) {
+          return { fecha: e.citaFechaPruebas, hora: e.citaHoraPruebas };
+        }
+      }
+      if (e.est === 'pte_proveedor' && e.citarProveedor && e.citaFechaProveedor) {
+        return { fecha: e.citaFechaProveedor, hora: e.citaHoraProveedor };
+      }
+      if ((e.est === 'pte_atc' || e.est === 'pte_interno') && e.citarAtcInterno && e.citaFechaAtcInterno) {
+        return { fecha: e.citaFechaAtcInterno, hora: e.citaHoraAtcInterno };
+      }
+      return null;
+    }
+
+    function escribirCitaGossanSiAplica(e) {
+      const cita = extraerCitaActiva(e);
+      if (cita) escribirCitaGossan(cita.fecha, cita.hora);
+    }
+
+    /**************************************************************************
+     * HELPERS — línea del abonado y líneas dinámicas
+     **************************************************************************/
+    function lineaAbonadoActual() {
+      try {
+        if (typeof obtenerTextoAbonado === 'function') {
+          const t = obtenerTextoAbonado()?.trim();
+          if (t && t !== 'ES' && !t.toLowerCase().includes('seleccione')) return t;
+        }
+      } catch {}
+      return '(sin línea detectada)';
+    }
+
+    lineaPrincipalNueva.value = lineaAbonadoActual();
+    lineaPrincipalAct.value   = lineaAbonadoActual();
+
+    function crearFilaLinea(contenedorLineas) {
+      const fila = document.createElement('div');
+      fila.style.cssText = 'display:flex;align-items:stretch;gap:6px;margin-bottom:6px;';
+      fila.innerHTML = `
+        <input type="text" class="linea-extra" placeholder="Ej: 655443322" style="flex:1;min-width:0;box-sizing:border-box;padding:4px 6px;">
+        <button type="button" style="flex-shrink:0;box-sizing:border-box;background:none;border:1px solid #dc3545;color:#dc3545;border-radius:6px;padding:0 10px;cursor:pointer;">✕</button>
+      `;
+      fila.querySelector('button').addEventListener('click', () => fila.remove());
+      contenedorLineas.appendChild(fila);
+    }
+
+    btnAddLineaNueva.addEventListener('click', () => crearFilaLinea(lineasExtraNueva));
+    btnAddLineaAct.addEventListener('click', () => crearFilaLinea(lineasExtraAct));
+
+    function leerLineas(principalInput, contenedorLineas) {
+      const extra = [...contenedorLineas.querySelectorAll('.linea-extra')]
+        .map(i => i.value.trim())
+        .filter(Boolean);
+      const todas = [principalInput.value.trim(), ...extra].filter(Boolean);
+      if (todas.length <= 1) {
+        return `Línea afectada: ${todas[0] || '(sin línea)'}.`;
+      }
+      return `Líneas afectadas: ${todas.join(', ')}.`;
+    }
+
+    /**************************************************************************
+     * HELPERS — motivo, zona, etiqueta, info condicional, dirección
+     **************************************************************************/
+    function conectarMotivo(motivoSel, btnInfo, cajaInfo, bloqueDireccion) {
+      motivoSel.addEventListener('change', () => {
+        const info = INFO_MOTIVO[motivoSel.value];
+        if (info) {
+          btnInfo.style.display = 'inline-block';
+          cajaInfo.innerHTML = info;
+        } else {
+          btnInfo.style.display = 'none';
+          cajaInfo.style.display = 'none';
+          cajaInfo.innerHTML = '';
+          btnInfo.textContent = '📘 Mostrar información';
+        }
+        bloqueDireccion.style.display = motivoSel.value === 'Cobertura' ? 'block' : 'none';
+      });
+    }
+
+    function conectarToggleInfo(btnInfo, cajaInfo) {
+      btnInfo.addEventListener('click', () => {
+        const abierto = cajaInfo.style.display === 'block';
+        cajaInfo.style.display = abierto ? 'none' : 'block';
+        btnInfo.textContent = abierto ? '📘 Mostrar información' : '📘 Ocultar información';
+      });
+    }
+
+    conectarMotivo(motivoInc, btnInfoMotivoNueva, infoMotivoNueva, bloqueDireccionNueva);
+    conectarToggleInfo(btnInfoMotivoNueva, infoMotivoNueva);
+    conectarMotivo(motivoAct, btnInfoMotivoAct, infoMotivoAct, bloqueDireccionAct);
+    conectarToggleInfo(btnInfoMotivoAct, infoMotivoAct);
+
+    function buildEtiquetaNueva() {
+      const motivo = motivoInc.value;
+      const zona = zonaNueva.value;
+      return `[Incidencia - Móvil - ${motivo} [${zona}]]`;
+    }
+
+    function buildEtiquetaAct() {
+      if (cambiarMotivo.checked && motivoAct.value) {
+        return `[Incidencia - Móvil - Actualización - ${motivoAct.value} [${zonaAct.value}]]`;
+      }
+      return `[Incidencia - Móvil - Actualización]`;
+    }
+
+    /**************************************************************************
+     * HELPERS — texto de Estado (nuevo modelo)
+     **************************************************************************/
+    function fmtFechaHora(fecha, hora) {
+      if (!fecha) return '';
+      const [y, m, d] = fecha.split('-');
+      return `${d}/${m}/${y}${hora ? ` a las ${hora}` : ''}`;
+    }
+
+    function leerEstado(suf) {
+      const est = q(`estado${suf}`).value;
+      return {
+        est,
+        // Pendiente cliente
+        situacion: q(`situacionCliente${suf}`)?.value || '',
+        waNoLoc: q(`waNoLoc${suf}`)?.checked || false,
+        waNumNoLoc: q(`waNumNoLoc${suf}`)?.value.trim() || '',
+        citarNoLoc: q(`citarNoLoc${suf}`)?.checked || false,
+        citaFechaNoLoc: q(`citaFechaNoLoc${suf}`)?.value || '',
+        citaHoraNoLoc: q(`citaHoraNoLoc${suf}`)?.value || '',
+        canalPruebas: q(`canalPruebas${suf}`)?.value || '',
+        citaFechaPruebas: q(`citaFechaPruebas${suf}`)?.value || '',
+        citaHoraPruebas: q(`citaHoraPruebas${suf}`)?.value || '',
+        waNumPruebas: q(`waNumPruebas${suf}`)?.value.trim() || '',
+        // Pendiente proveedor
+        tipoProveedor: q(`tipoProveedor${suf}`)?.value || 'esperando',
+        reclamaProveedor: q(`reclamaProveedor${suf}`)?.checked || false,
+        escalaProveedor: q(`escalaProveedor${suf}`)?.checked || false,
+        ticketProveedor: q(`ticketProveedor${suf}`)?.value.trim() || '',
+        ticketObligatorio: suf === 'Nueva' ? true : (q(`cbTicket${suf}`)?.checked || false),
+        citarProveedor: q(`citarProveedor${suf}`)?.checked || false,
+        citaFechaProveedor: q(`citaFechaProveedor${suf}`)?.value || '',
+        citaHoraProveedor: q(`citaHoraProveedor${suf}`)?.value || '',
+        // Pendiente ATC/Interno
+        citarAtcInterno: q(`citarAtcInterno${suf}`)?.checked || false,
+        citaFechaAtcInterno: q(`citaFechaAtcInterno${suf}`)?.value || '',
+        citaHoraAtcInterno: q(`citaHoraAtcInterno${suf}`)?.value || '',
+        // Final
+        motivoFinal: q(`motivoFinal${suf}`)?.value || ''
+      };
+    }
+
+    function buildTextoEstado(e) {
+      if (e.est === 'inicial') return 'INICIAL';
+
+      if (e.est === 'pte_cliente') {
+        let base = '';
+        if (e.situacion === 'no_localizado') {
+          base = 'no localizado';
+          if (e.waNoLoc && e.waNumNoLoc) base += `; WhatsApp enviado a ${e.waNumNoLoc}`;
+          if (e.citarNoLoc && e.citaFechaNoLoc) base += `; se cita el ${fmtFechaHora(e.citaFechaNoLoc, e.citaHoraNoLoc)}`;
+        } else if (e.situacion === 'pendiente_pruebas') {
+          base = 'pendiente pruebas';
+          if (e.canalPruebas === 'cita' && e.citaFechaPruebas) {
+            base += `; se cita el ${fmtFechaHora(e.citaFechaPruebas, e.citaHoraPruebas)}`;
+          } else if (e.canalPruebas === 'whatsapp' && e.waNumPruebas) {
+            base += `; WhatsApp enviado a ${e.waNumPruebas}`;
+          }
+        }
+        return `PTE CLIENTE (${base})`;
+      }
+
+      if (e.est === 'pte_proveedor') {
+        const d = [];
+        d.push(e.tipoProveedor === 'masiva' ? 'afectado por incidencia masiva' : 'esperando respuesta');
+        if (e.ticketProveedor) d.push(`ticket: ${e.ticketProveedor}`);
+        if (e.reclamaProveedor) d.push('reclamado a proveedor');
+        if (e.escalaProveedor) d.push('escalado');
+        if (e.citarProveedor && e.citaFechaProveedor) {
+          d.push(`revisión programada el ${fmtFechaHora(e.citaFechaProveedor, e.citaHoraProveedor)}`);
+        }
+        return `PTE PROVEEDOR (${d.join('; ')})`;
+      }
+
+      if (e.est === 'pte_atc' || e.est === 'pte_interno') {
+        const nombre = e.est === 'pte_atc' ? 'PTE ATC' : 'PTE INTERNO';
+        if (e.citarAtcInterno && e.citaFechaAtcInterno) {
+          return `${nombre} (revisión programada el ${fmtFechaHora(e.citaFechaAtcInterno, e.citaHoraAtcInterno)})`;
+        }
+        return nombre;
+      }
+
+      if (e.est === 'final') {
+        const map = {
+          solucionada: 'CIERRE: RESUELTA',
+          no_localizado_48h: 'CIERRE: no localizado tras 48h',
+          incidencia_masiva: 'CIERRE: incidencia masiva, informado al cliente',
+          pendiente_comprobacion: 'CIERRE: pendiente comprobación, baja urgencia',
+          sin_problema: 'CIERRE: no tiene problemas con el servicio'
+        };
+        return map[e.motivoFinal] || 'CIERRE';
+      }
+
+      return '';
+    }
+
+    function validarEstado(e) {
+      if (!e.est) return '⚠️ Selecciona el estado.';
+      if (e.est === 'pte_cliente') {
+        if (!e.situacion) return '⚠️ Selecciona la situación del cliente.';
+        if (e.situacion === 'no_localizado' && e.waNoLoc && !e.waNumNoLoc)
+          return '⚠️ Indica el número de WhatsApp.';
+        if (e.situacion === 'pendiente_pruebas') {
+          if (!e.canalPruebas) return '⚠️ Selecciona el canal (Cita o WhatsApp) para Pendiente pruebas.';
+          if (e.canalPruebas === 'cita' && !e.citaFechaPruebas) return '⚠️ Indica la fecha de la cita.';
+          if (e.canalPruebas === 'whatsapp' && !e.waNumPruebas) return '⚠️ Indica el número de WhatsApp.';
+        }
+      }
+      if (e.est === 'pte_proveedor' && e.ticketObligatorio && !e.ticketProveedor) {
+        return '⚠️ Indica el número de ticket del proveedor.';
+      }
+      if (e.est === 'final' && !e.motivoFinal) {
+        return '⚠️ Selecciona el motivo de cierre.';
+      }
+      return null;
+    }
+
+    /**************************************************************************
+     * EVENTOS — ESTADO (compartidos, parametrizados por sufijo)
+     **************************************************************************/
+    function conectarEstado(suf) {
+      const estadoSel   = q(`estado${suf}`);
+      const subCliente  = q(`subCliente${suf}`);
+      const subProveedor = q(`subProveedor${suf}`);
+      const subAtcInterno = q(`subAtcInterno${suf}`);
+      const subFinal    = q(`subFinal${suf}`);
+      const bloquePrioridad = suf === 'Nueva' ? bloquePrioridadNueva : null;
+
+      estadoSel.addEventListener('change', () => {
+        const est = estadoSel.value;
+        subCliente.style.display    = est === 'pte_cliente'   ? 'block' : 'none';
+        subProveedor.style.display  = est === 'pte_proveedor' ? 'block' : 'none';
+        subAtcInterno.style.display = (est === 'pte_atc' || est === 'pte_interno') ? 'block' : 'none';
+        subFinal.style.display      = est === 'final' ? 'block' : 'none';
+        if (bloquePrioridad) {
+          bloquePrioridad.style.display = (est && est !== 'final') ? 'block' : 'none';
+        }
+      });
+
+      // Situación cliente
+      const situacionSel = q(`situacionCliente${suf}`);
+      situacionSel.addEventListener('change', () => {
+        const val = situacionSel.value;
+        q(`bloqueNoLoc${suf}`).style.display = val === 'no_localizado' ? 'block' : 'none';
+        q(`bloquePruebas${suf}`).style.display = val === 'pendiente_pruebas' ? 'block' : 'none';
+      });
+
+      const waNoLocChk = q(`waNoLoc${suf}`);
+      waNoLocChk.addEventListener('change', () => {
+        q(`bloqueWaNumNoLoc${suf}`).style.display = waNoLocChk.checked ? 'block' : 'none';
+      });
+
+      const citarNoLocChk = q(`citarNoLoc${suf}`);
+      citarNoLocChk.addEventListener('change', () => {
+        q(`bloqueCitaNoLoc${suf}`).style.display = citarNoLocChk.checked ? 'block' : 'none';
+      });
+
+      const canalPruebasSel = q(`canalPruebas${suf}`);
+      canalPruebasSel.addEventListener('change', () => {
+        const val = canalPruebasSel.value;
+        q(`bloqueCitaPruebas${suf}`).style.display = val === 'cita' ? 'block' : 'none';
+        q(`bloqueWaPruebas${suf}`).style.display = val === 'whatsapp' ? 'block' : 'none';
+      });
+
+      // Proveedor: cita toggle
+      const citarProvChk = q(`citarProveedor${suf}`);
+      citarProvChk.addEventListener('change', () => {
+        q(`bloqueCitaProveedor${suf}`).style.display = citarProvChk.checked ? 'block' : 'none';
+      });
+
+      // Proveedor: ticket detrás de checkbox, solo en Actualización
+      if (suf !== 'Nueva') {
+        const cbTicket = q(`cbTicket${suf}`);
+        cbTicket.addEventListener('change', () => {
+          q(`bloqueTicketProveedor${suf}`).style.display = cbTicket.checked ? 'block' : 'none';
+          if (!cbTicket.checked) q(`ticketProveedor${suf}`).value = '';
+        });
+      }
+
+      // ATC/Interno: cita toggle
+      const citarAtcChk = q(`citarAtcInterno${suf}`);
+      citarAtcChk.addEventListener('change', () => {
+        q(`bloqueCitaAtcInterno${suf}`).style.display = citarAtcChk.checked ? 'block' : 'none';
+      });
+    }
+
+    conectarEstado('Nueva');
+    conectarEstado('Act');
+
+    /**************************************************************************
+     * EVENTOS — CONTROL PRINCIPAL (sin cambios de patrón)
+     **************************************************************************/
+    tipoGestion.addEventListener('change', () => {
+      bloqueNueva.style.display         = tipoGestion.value === 'nueva'         ? 'block' : 'none';
+      bloqueActualizacion.style.display = tipoGestion.value === 'actualizacion' ? 'block' : 'none';
+    });
+
+    /**************************************************************************
+     * EVENTOS — NUEVA (bono, sin cambios de patrón)
+     **************************************************************************/
+    esHija.addEventListener('change', () => {
+      bloqueHija.style.display = esHija.checked ? 'block' : 'none';
+    });
+
     function necesitaBono(motivo) {
-      const t = motivo.toLowerCase();
+      const t = (motivo || '').toLowerCase();
       return t.includes('datos móviles') || t.includes('lentitud');
     }
 
@@ -2982,63 +3491,6 @@ Flujos.registrar({
       }
       return null;
     }
-
-    function buildTextoEstado(est, subEstCliente, pruebasInd, waEnviado, seReclama, escN2, escCoord, ticket) {
-      if (est === 'pte_cliente') {
-        if (subEstCliente === 'avisara') {
-          const pruTxt = pruebasInd === 'indicadas' ? 'pruebas indicadas' : 'pruebas no indicadas';
-          return `PTE CLIENTE (avisará; ${pruTxt})`;
-        } else if (subEstCliente === 'no_localizado') {
-          return `PTE CLIENTE (no localizado${waEnviado ? '; WA enviado' : ''})`;
-        } else if (subEstCliente === 'citado') {
-          return `PTE CLIENTE (citado)`;
-        }
-      } else if (est === 'pte_proveedor') {
-        const d = [];
-        if (ticket)    d.push(`ticket: ${ticket}`);
-        if (seReclama) d.push('reclamado');
-        if (escN2)     d.push('escalado N2');
-        if (escCoord)  d.push('escalado coordinador');
-        return `PTE PROVEEDOR${d.length ? ` (${d.join(', ')})` : ''}`;
-      }
-      const nombres = { pte_atc: 'PTE ATC', pte_interno: 'PTE INTERNO', resuelta: 'RESUELTA' };
-      return nombres[est] || est.toUpperCase();
-    }
-
-    function buildTextoDatos(interesBono, interesTarifa, subflujo) {
-      const partes = ['Datos agotados'];
-      partes.push(`Interesado en bono adicional: ${interesBono === 'si' ? 'Sí' : 'No'}`);
-      partes.push(`Interesado en ampliar tarifa: ${interesTarifa === 'si' ? 'Sí' : 'No'}`);
-      if (interesBono === 'si' && subflujo) {
-        const textoBono = subflujo.getTextoBono?.();
-        if (textoBono) partes.push(textoBono);
-      }
-      return partes.join('. ');
-    }
-
-    function feedbackBoton(btn) {
-      btn.style.background = '#28a745';
-      btn.textContent      = '✅ Generado';
-      setTimeout(() => {
-        btn.style.background = '#007bff';
-        btn.textContent      = '📝 Generar resultado';
-      }, 1500);
-    }
-
-    /**************************************************************************
-     * EVENTOS — CONTROL PRINCIPAL
-     **************************************************************************/
-    tipoGestion.addEventListener('change', () => {
-      bloqueNueva.style.display         = tipoGestion.value === 'nueva'         ? 'block' : 'none';
-      bloqueActualizacion.style.display = tipoGestion.value === 'actualizacion' ? 'block' : 'none';
-    });
-
-    /**************************************************************************
-     * EVENTOS — NUEVA INCIDENCIA
-     **************************************************************************/
-    esHija.addEventListener('change', () => {
-      bloqueHija.style.display = esHija.checked ? 'block' : 'none';
-    });
 
     motivoInc.addEventListener('change', () => {
       const mostrar = necesitaBono(motivoInc.value);
@@ -3069,30 +3521,21 @@ Flujos.registrar({
       }
     });
 
-    estadoNueva.addEventListener('change', () => {
-      const est = estadoNueva.value;
-      subClienteNueva.style.display      = est === 'pte_cliente'   ? 'block' : 'none';
-      subProveedorNueva.style.display    = est === 'pte_proveedor' ? 'block' : 'none';
-      bloquePrioridadNueva.style.display = est && est !== 'resuelta' ? 'block' : 'none';
-      subEstClienteNueva.value           = '';
-      bloqueAvisaraNueva.style.display   = 'none';
-      bloqueNoLocNueva.style.display     = 'none';
-      prioridadNueva.value               = '';
-    });
-
-    subEstClienteNueva.addEventListener('change', () => {
-      bloqueAvisaraNueva.style.display = subEstClienteNueva.value === 'avisara'       ? 'block' : 'none';
-      bloqueNoLocNueva.style.display   = subEstClienteNueva.value === 'no_localizado' ? 'block' : 'none';
-    });
-
     /**************************************************************************
-     * EVENTOS — ACTUALIZACIÓN
+     * EVENTOS — ACTUALIZACIÓN (bono + opcionales, sin cambios de patrón)
      **************************************************************************/
+    cbLineasAct.addEventListener('change', () => {
+      bloqueLineasAct.style.display = cbLineasAct.checked ? 'block' : 'none';
+    });
+
     cambiarMotivo.addEventListener('change', () => {
       bloqueNuevoMotivo.style.display = cambiarMotivo.checked ? 'block' : 'none';
       if (!cambiarMotivo.checked) {
         motivoAct.value = '';
         bloqueDatosAgotadosAct.style.display = 'none';
+        bloqueDireccionAct.style.display = 'none';
+        btnInfoMotivoAct.style.display = 'none';
+        infoMotivoAct.style.display = 'none';
         subflujoBonoAct = limpiarBono(subBonoBoxAct, datosAgotadosAct,
           preguntasBonoAct, interesBonoAct, interesTarifaAct);
       }
@@ -3127,7 +3570,6 @@ Flujos.registrar({
       }
     });
 
-    // Checkboxes campos opcionales actualización
     cbInfoAct.addEventListener('change', () => {
       bloqueInfoAct.style.display = cbInfoAct.checked ? 'block' : 'none';
       if (!cbInfoAct.checked) infoAct.value = '';
@@ -3143,82 +3585,89 @@ Flujos.registrar({
       if (!cbPruebasAct.checked) pruebasAct.value = '';
     });
 
-    estadoAct.addEventListener('change', () => {
-      const est = estadoAct.value;
-      subClienteAct.style.display    = est === 'pte_cliente'   ? 'block' : 'none';
-      subProveedorAct.style.display  = est === 'pte_proveedor' ? 'block' : 'none';
-      subEstClienteAct.value         = '';
-      bloqueAvisaraAct.style.display = 'none';
-      bloqueNoLocAct.style.display   = 'none';
-    });
-
-    subEstClienteAct.addEventListener('change', () => {
-      bloqueAvisaraAct.style.display = subEstClienteAct.value === 'avisara'       ? 'block' : 'none';
-      bloqueNoLocAct.style.display   = subEstClienteAct.value === 'no_localizado' ? 'block' : 'none';
-    });
-
-    cbTicketProvAct.addEventListener('change', () => {
-      bloqueTicketProvAct.style.display = cbTicketProvAct.checked ? 'block' : 'none';
-      if (!cbTicketProvAct.checked) ticketProveedorAct.value = '';
-    });
-
     cambiarPrioridad.addEventListener('change', () => {
       bloqueNuevaPrioridad.style.display = cambiarPrioridad.checked ? 'block' : 'none';
       if (!cambiarPrioridad.checked) prioridadAct.value = '';
     });
 
+    cbContactoNueva.addEventListener('change', () => {
+      bloqueContactoNueva.style.display = cbContactoNueva.checked ? 'block' : 'none';
+      if (!cbContactoNueva.checked) telContactoNueva.value = '';
+    });
+
+    cbContactoAct.addEventListener('change', () => {
+      bloqueContactoAct.style.display = cbContactoAct.checked ? 'block' : 'none';
+      if (!cbContactoAct.checked) telContactoAct.value = '';
+    });
+
+    function feedbackBoton(btn) {
+      btn.style.background = '#28a745';
+      btn.textContent      = '✅ Generado';
+      setTimeout(() => {
+        btn.style.background = '#007bff';
+        btn.textContent      = '📝 Generar resultado';
+      }, 1500);
+    }
+
     /**************************************************************************
      * GENERAR — NUEVA INCIDENCIA
      **************************************************************************/
     btnGenerarNueva.addEventListener('click', () => {
-      const est = estadoNueva.value;
-
       if (!operador.value)  return alert('⚠️ Selecciona el operador.');
+      if (!zonaNueva.value) return alert('⚠️ Selecciona la zona.');
       if (!motivoInc.value) return alert('⚠️ Selecciona el motivo de la incidencia.');
-      if (!est)             return alert('⚠️ Selecciona el estado.');
-      if (est !== 'resuelta' && !prioridadNueva.value)
-                            return alert('⚠️ Selecciona la prioridad.');
-      if (est === 'pte_cliente' && !subEstClienteNueva.value)
-                            return alert('⚠️ Selecciona la situación del cliente.');
-      if (subEstClienteNueva.value === 'avisara' && !pruebasIndNueva.value)
-                            return alert('⚠️ Indica si las pruebas fueron indicadas o no.');
+      if (motivoInc.value === 'Cobertura' && !direccionNueva.value.trim())
+        return alert('⚠️ Indica la dirección (obligatoria en incidencias de Cobertura).');
+
+      const e = leerEstado('Nueva');
+      const errorEstado = validarEstado(e);
+      if (errorEstado) return alert(errorEstado);
+      if (e.est !== 'final' && !prioridadNueva.value)
+        return alert('⚠️ Selecciona la prioridad.');
+
       if (datosAgotadosNueva.checked) {
         if (!interesBonoNueva.value)   return alert('⚠️ Indica si el cliente está interesado en bono adicional.');
         if (!interesTarifaNueva.value) return alert('⚠️ Indica si el cliente está interesado en ampliar tarifa.');
         if (interesBonoNueva.value === 'si' && !subflujoBono?.getTextoBono?.())
           return alert('⚠️ Completa los datos del bono adicional.');
       }
-        if (est === 'pte_proveedor' && !ticketProveedorNueva.value.trim())
-            return alert('⚠️ Indica el número de ticket del operador.');
+      if (cbContactoNueva.checked && !telContactoNueva.value.trim())
+        return alert('⚠️ Indica el número de contacto o desmarca la opción.');
 
-      const zona    = motivoInc.selectedOptions[0]?.parentElement?.label || '';
-      const ticket  = ticketProveedorNueva.value.trim();
-      const textoEstado = buildTextoEstado(
-        est,
-        subEstClienteNueva.value, pruebasIndNueva.value, waEnviadoNueva.checked,
-        seReclamaNueva.checked, escN2Nueva.checked, escCoordNueva.checked,
-        ticket
-      );
-
+      const etiqueta = buildEtiquetaNueva();
       const partes = [];
-      partes.push('Nueva incidencia');
-      if (esHija.checked) partes.push(`hija de ${incMadre.value.trim() || 'sin nº'}`);
-      partes.push(`Operador: ${operador.value}`);
-      partes.push(`Motivo: ${motivoInc.value} [${zona}]`);
+
+      partes.push(leerLineas(lineaPrincipalNueva, lineasExtraNueva));
+      if (esHija.checked) partes.push(`Hija de ${incMadre.value.trim() || 'sin nº'}.`);
+      partes.push(`Operador: ${operador.value}.`);
+      if (motivoInc.value === 'Cobertura') {
+        partes.push(`Dirección: ${direccionNueva.value.trim()}.`);
+      }
 
       const info = infoAdicional.value.trim();
       const pru  = pruebasRealizadas.value.trim();
-      if (info) partes.push(`Info: ${info}`);
-      if (pru)  partes.push(`Pruebas: ${pru}`);
+      if (info) partes.push(`Info: ${info}.`);
+      if (pru)  partes.push(`Pruebas: ${pru}.`);
 
       if (datosAgotadosNueva.checked) {
-        partes.push(buildTextoDatos(interesBonoNueva.value, interesTarifaNueva.value, subflujoBono));
+        const partesDatos = ['Datos agotados'];
+        partesDatos.push(`Interesado en bono adicional: ${interesBonoNueva.value === 'si' ? 'Sí' : 'No'}`);
+        partesDatos.push(`Interesado en ampliar tarifa: ${interesTarifaNueva.value === 'si' ? 'Sí' : 'No'}`);
+        if (interesBonoNueva.value === 'si' && subflujoBono) {
+          const textoBono = subflujoBono.getTextoBono?.();
+          if (textoBono) partesDatos.push(textoBono);
+        }
+        partes.push(partesDatos.join('. ') + '.');
       }
 
-      if (est !== 'resuelta') partes.push(`Prioridad: ${prioridadNueva.value.toUpperCase()}`);
-      partes.push(`Estado: ${textoEstado}`);
+      if (e.est !== 'final') partes.push(`Prioridad: ${prioridadNueva.value}.`);
+      partes.push(`Estado: ${buildTextoEstado(e)}.`);
+      if (cbContactoNueva.checked) partes.push(`Teléfono de contacto: ${telContactoNueva.value.trim()}.`);
 
-      pegarTexto(partes.join('. ') + '.');
+      pegarTexto(`${etiqueta} ${partes.join(' ')}`);
+      escribirEstadoYPrioridadGossan(e.est, e.est !== 'final' ? prioridadNueva.value : null);
+      escribirCitaGossanSiAplica(e);
+      try { fvSetAsignacion(ASIGNACION_INCIDENCIAS_MOVILES); } catch (err) { console.warn('[incidenciaServicio] No se pudo marcar asignación:', err); }
       feedbackBoton(btnGenerarNueva);
 
       if (datosAgotadosNueva.checked && interesBonoNueva.value === 'si' && subflujoBono) {
@@ -3230,60 +3679,66 @@ Flujos.registrar({
      * GENERAR — ACTUALIZACIÓN
      **************************************************************************/
     btnGenerarAct.addEventListener('click', () => {
-      const est = estadoAct.value;
-
-      if (!est) return alert('⚠️ Selecciona el nuevo estado.');
-      if (est === 'pte_cliente' && !subEstClienteAct.value)
-                return alert('⚠️ Selecciona la situación del cliente.');
-      if (subEstClienteAct.value === 'avisara' && !pruebasIndAct.value)
-                return alert('⚠️ Indica si las pruebas fueron indicadas o no.');
       if (cambiarMotivo.checked && !motivoAct.value)
-                return alert('⚠️ Selecciona el nuevo motivo o desmarca la opción.');
+        return alert('⚠️ Selecciona el nuevo motivo o desmarca la opción.');
+      if (cambiarMotivo.checked && !zonaAct.value)
+        return alert('⚠️ Selecciona la zona.');
+      if (cambiarMotivo.checked && motivoAct.value === 'Cobertura' && !direccionAct.value.trim())
+        return alert('⚠️ Indica la dirección (obligatoria en incidencias de Cobertura).');
+
+      const e = leerEstado('Act');
+      const errorEstado = validarEstado(e);
+      if (errorEstado) return alert(errorEstado);
       if (cambiarPrioridad.checked && !prioridadAct.value)
-                return alert('⚠️ Selecciona la nueva prioridad o desmarca la opción.');
-      if (cbTicketProvAct.checked && !ticketProveedorAct.value.trim())
-                return alert('⚠️ Indica el número de ticket o desmarca la opción.');
+        return alert('⚠️ Selecciona la nueva prioridad o desmarca la opción.');
+
       if (datosAgotadosAct.checked) {
         if (!interesBonoAct.value)   return alert('⚠️ Indica si el cliente está interesado en bono adicional.');
         if (!interesTarifaAct.value) return alert('⚠️ Indica si el cliente está interesado en ampliar tarifa.');
         if (interesBonoAct.value === 'si' && !subflujoBonoAct?.getTextoBono?.())
           return alert('⚠️ Completa los datos del bono adicional.');
       }
+      if (cbContactoAct.checked && !telContactoAct.value.trim())
+        return alert('⚠️ Indica el número de contacto o desmarca la opción.');
 
-      const ticket = cbTicketProvAct.checked ? ticketProveedorAct.value.trim() : '';
-      const textoEstado = buildTextoEstado(
-        est,
-        subEstClienteAct.value, pruebasIndAct.value, waEnviadoAct.checked,
-        seReclamaAct.checked, escN2Act.checked, escCoordAct.checked,
-        ticket
-      );
-
+      const etiqueta = buildEtiquetaAct();
       const partes = [];
-      partes.push('Actualización');
 
-      if (cambiarMotivo.checked) {
-        const zona = motivoAct.selectedOptions[0]?.parentElement?.label || '';
-        partes.push(`Motivo: ${motivoAct.value} [${zona}]`);
+      if (cbLineasAct.checked) {
+        partes.push(leerLineas(lineaPrincipalAct, lineasExtraAct));
       }
 
-      // Campos opcionales
+      if (cambiarMotivo.checked && motivoAct.value === 'Cobertura') {
+        partes.push(`Dirección: ${direccionAct.value.trim()}.`);
+      }
+
       if (cbInfoAct.checked && infoAct.value.trim())
-        partes.push(`Info: ${infoAct.value.trim()}`);
+        partes.push(`Info: ${infoAct.value.trim()}.`);
       if (cbActProvAct.checked && actProvAct.value.trim())
-        partes.push(`Actualización proveedor: ${actProvAct.value.trim()}`);
+        partes.push(`Actualización proveedor: ${actProvAct.value.trim()}.`);
       if (cbPruebasAct.checked && pruebasAct.value.trim())
-        partes.push(`Pruebas: ${pruebasAct.value.trim()}`);
+        partes.push(`Pruebas: ${pruebasAct.value.trim()}.`);
 
       if (datosAgotadosAct.checked) {
-        partes.push(buildTextoDatos(interesBonoAct.value, interesTarifaAct.value, subflujoBonoAct));
+        const partesDatos = ['Datos agotados'];
+        partesDatos.push(`Interesado en bono adicional: ${interesBonoAct.value === 'si' ? 'Sí' : 'No'}`);
+        partesDatos.push(`Interesado en ampliar tarifa: ${interesTarifaAct.value === 'si' ? 'Sí' : 'No'}`);
+        if (interesBonoAct.value === 'si' && subflujoBonoAct) {
+          const textoBono = subflujoBonoAct.getTextoBono?.();
+          if (textoBono) partesDatos.push(textoBono);
+        }
+        partes.push(partesDatos.join('. ') + '.');
       }
 
-      if (cambiarPrioridad.checked && est !== 'resuelta') {
-        partes.push(`Prioridad: ${prioridadAct.value.toUpperCase()}`);
+      if (cambiarPrioridad.checked && e.est !== 'final') {
+        partes.push(`Prioridad: ${prioridadAct.value}.`);
       }
-      partes.push(`Estado: ${textoEstado}`);
+      partes.push(`Estado: ${buildTextoEstado(e)}.`);
+      if (cbContactoAct.checked) partes.push(`Teléfono de contacto: ${telContactoAct.value.trim()}.`);
 
-      pegarTexto(partes.join('. ') + '.');
+      pegarTexto(`${etiqueta} ${partes.join(' ')}`);
+      escribirEstadoYPrioridadGossan(e.est, cambiarPrioridad.checked ? prioridadAct.value : null);
+      escribirCitaGossanSiAplica(e);
       feedbackBoton(btnGenerarAct);
 
       if (datosAgotadosAct.checked && interesBonoAct.value === 'si' && subflujoBonoAct) {
@@ -3589,174 +4044,1480 @@ Flujos.registrar({
 
 
 /**************************************************************************
- * 🌐 Flujo: Fibrablanca Community (Internet) — Categorías: nueva, actualizar
- **************************************************************************/
-Flujos.registrar({
-  id: 'fibrablanca-community',
-  nombre: 'Fibrablanca Community',
-  tipos: ['internet'],
-  categorias: ['nueva', 'actualizar'],
+   * ⚠️ Flujo: Incidencia Fibra Externa — Categorías: nueva, actualizar
+   * Sustituye a "Fibrablanca Community". Adopta la estructura de proveedor,
+   * Motivo compartido, Estado/Subestados/Cita y Prioridad del flujo
+   * incidenciaServicio (móvil). Cubre los 4 proveedores de fibra externa:
+   * Fibra Blanca (con Motivo → Plantilla Community por defecto, editable,
+   * y los 5 formularios de diagnóstico + copiar a Community de siempre),
+   * Fibra Verde/Naranja (Descripción + Niveles/Equipos + Pruebas) y
+   * Fibra Azul (igual que Verde/Naranja pero sin Niveles/Equipos).
+   **************************************************************************/
+  Flujos.registrar({
+    id: 'incidenciaFibraExterna',
+    nombre: '⚠️ Incidencia Fibra Externa',
+    tipos: ['internet'],
+    categorias: ['nueva', 'actualizar'],
 
-  render(contenedor, pegarTexto) {
-    contenedor.innerHTML = `
-      <h3 style="margin-bottom:8px;">🌐 Fibrablanca Community</h3>
+    render(contenedor, pegarTexto) {
+      const q = id => contenedor.querySelector('#' + id);
 
-      <label>Nº OT (obligatorio):</label>
-      <input id="fb-ot" type="text" style="width:100%;margin-bottom:6px;" required>
+      const PROVEEDOR_LABEL = {
+        blanca: 'Fibra Blanca',
+        verde: 'Fibra Verde',
+        naranja: 'Fibra Naranja',
+        azul: 'Fibra Azul'
+      };
+      // Única asignación real documentada (205 = FIBRA BLANCA, manual_recall.md);
+      // se reutiliza para los 4 proveedores hasta que existan valores propios.
+      const ASIGNACION_FIBRA_EXTERNA = '205';
 
-      <label>Instalación YMO:</label>
-      <select id="fb-ymo" style="width:100%;margin-bottom:6px;">
-        <option selected>NO</option>
-        <option>SI</option>
+      // Motivo (compartido, mismas 7 opciones que incidenciaServicioInternet)
+      // → plantilla Community por defecto para Fibra Blanca (editable a mano).
+      const MOTIVO_PLANTILLA_DEFAULT = {
+        'Sin servicio': 'incomunicado',
+        'Sin internet': 'no-navega-cable',
+        'Lentitud': 'bajo-sincronismo',
+        'Cortes': 'cortes-ftth',
+        'Desconexiones / cobertura wifi': 'sin_plantilla',
+        'Configuración solicitada': 'sin_plantilla',
+        'Otro': 'sin_plantilla'
+      };
+
+      contenedor.innerHTML = `
+      <h3 style="margin-bottom:8px;">⚠️ Incidencia Fibra Externa</h3>
+
+      <label><b>Tipo de gestión:</b></label>
+      <select id="fbc-gestion" style="width:100%;margin-bottom:10px;">
+        <option value="">— Selecciona —</option>
+        <option value="nueva">🆕 Nueva incidencia</option>
+        <option value="actualizacion">🔄 Actualización</option>
       </select>
 
-      <label>Teléfono fijo servicio (opcional):</label>
-      <input id="fb-fijo" type="text" style="width:100%;margin-bottom:6px;">
+      <!-- ═══════════════════════════════════════════════════
+           BLOQUE: NUEVA INCIDENCIA
+      ════════════════════════════════════════════════════ -->
+      <div id="fbc-bloque-nueva" style="display:none;">
 
-      <label>Teléfono móvil de contacto (obligatorio):</label>
-      <input id="fb-movil" type="text" style="width:100%;margin-bottom:6px;" required>
+        <label style="display:flex;align-items:center;gap:8px;margin-bottom:6px;cursor:pointer;">
+          <input type="checkbox" id="fbc-nueva-hija"> <b>Incidencia hija</b>
+        </label>
+        <div id="fbc-nueva-hija-bloque" style="display:none;margin-bottom:8px;">
+          <label>Nº incidencia madre:</label>
+          <input id="fbc-nueva-madre" type="text" placeholder="Ej: INC-00123" style="width:100%;margin-bottom:6px;">
+        </div>
 
-      <label>Nombre de contacto (obligatorio):</label>
-      <input id="fb-nombre" type="text" style="width:100%;margin-bottom:6px;" required>
-
-      <label>Horario de contacto para pruebas (opcional):</label>
-      <input id="fb-horario" type="text" style="width:100%;margin-bottom:6px;">
-
-      <label>Información adicional:</label>
-      <textarea id="fb-info" style="width:100%;height:60px;margin-bottom:6px;">Se realiza diagnóstico en Schaman.</textarea>
-
-      <fieldset style="border:1px solid #ccc;border-radius:6px;padding:6px;margin-bottom:8px;">
-        <legend>💡 Luces router</legend>
-
-        <label>PWR / POWER:</label>
-        <select id="fb-pwr" style="width:100%;margin-bottom:4px;">
-          <option selected>Verde</option>
-          <option>Apagado</option>
+        <label><b>Proveedor:</b></label>
+        <select id="fbc-proveedor" style="width:100%;margin-bottom:10px;">
+          <option value="">— Selecciona —</option>
+          <option value="blanca">Fibra Blanca</option>
+          <option value="verde">Fibra Verde</option>
+          <option value="naranja">Fibra Naranja</option>
+          <option value="azul">Fibra Azul</option>
         </select>
 
-        <label>PON / DSL / WAN:</label>
-        <select id="fb-pon" style="width:100%;margin-bottom:4px;">
-          <option>Encendido</option>
-          <option selected>Apagado</option>
+        <label><b>Motivo:</b></label>
+        <select id="fbc-motivo" style="width:100%;margin-bottom:10px;">
+          <option value="">— Selecciona —</option>
+          <option value="Sin servicio">Sin servicio</option>
+          <option value="Sin internet">Sin internet</option>
+          <option value="Lentitud">Lentitud</option>
+          <option value="Cortes">Cortes</option>
+          <option value="Desconexiones / cobertura wifi">Desconexiones / cobertura wifi</option>
+          <option value="Configuración solicitada">Configuración solicitada</option>
+          <option value="Otro">Otro</option>
         </select>
 
-        <label>LOS:</label>
-        <select id="fb-los" style="width:100%;margin-bottom:4px;">
-          <option>Verde</option>
-          <option selected>Rojo</option>
-          <option>Apagado</option>
+        <!-- ─────────────────────────────────────────
+             FIBRA BLANCA — Plantilla Community
+        ───────────────────────────────────────── -->
+        <div id="fbc-bloque-tipologia" style="display:none;border:1px solid #29BDE6;border-radius:8px;padding:10px;margin-bottom:10px;background:#f7fdff;">
+
+          <div style="font-weight:bold;color:#1A8EAD;margin-bottom:8px;">📋 Plantilla para Community</div>
+
+          <label><b>Plantilla:</b></label>
+          <select id="fbc-selector" style="width:100%;margin-bottom:10px;">
+            <option value="">— Selecciona —</option>
+            <option value="sin_plantilla">Sin plantilla</option>
+            <option value="incomunicado">Incomunicado</option>
+            <option value="bajo-sincronismo">Bajo sincronismo</option>
+            <option value="no-navega-cable">No navega cable</option>
+            <option value="cortes-ftth">Cortes FTTH</option>
+            <option value="averia-wifi">Avería Wifi</option>
+          </select>
+
+          <!-- ─────────────────────────────────────────
+               FORMULARIO: INCOMUNICADO
+          ───────────────────────────────────────── -->
+          <div id="fbc-form-incomunicado" style="display:none;">
+
+            <label>Nº OT (obligatorio):</label>
+            <input id="fbc-inc-ot" type="text" style="width:100%;margin-bottom:6px;">
+
+            <label>Instalación YMO:</label>
+            <select id="fbc-inc-ymo" style="width:100%;margin-bottom:6px;">
+              <option>NO</option><option>SI</option>
+            </select>
+
+            <label>Teléfono fijo servicio (opcional):</label>
+            <input id="fbc-inc-fijo" type="text" style="width:100%;margin-bottom:6px;">
+
+            <label>Teléfono móvil de contacto (obligatorio):</label>
+            <input id="fbc-inc-movil" type="text" style="width:100%;margin-bottom:6px;">
+
+            <label>Nombre de contacto (obligatorio):</label>
+            <input id="fbc-inc-nombre" type="text" style="width:100%;margin-bottom:6px;">
+
+            <label>Horario de contacto para pruebas (opcional):</label>
+            <input id="fbc-inc-horario" type="text" style="width:100%;margin-bottom:6px;">
+
+            <label>Información adicional:</label>
+            <textarea id="fbc-inc-info" style="width:100%;height:60px;margin-bottom:6px;">Se realiza diagnóstico en Schaman.</textarea>
+
+            <fieldset style="border:1px solid #ccc;border-radius:6px;padding:6px;margin-bottom:8px;">
+              <legend>💡 Luces router</legend>
+              <label>PWR / POWER:</label>
+              <select id="fbc-inc-pwr" style="width:100%;margin-bottom:2px;">
+                <option>Verde</option><option>Apagado</option>
+              </select>
+              <label>PON / DSL / WAN:</label>
+              <select id="fbc-inc-pon" style="width:100%;margin-bottom:2px;">
+                <option>Encendido</option><option selected>Apagado</option>
+              </select>
+              <label>LOS:</label>
+              <select id="fbc-inc-los" style="width:100%;margin-bottom:2px;">
+                <option>Verde</option><option selected>Rojo</option><option>Apagado</option>
+              </select>
+              <label>INTERNET / @:</label>
+              <select id="fbc-inc-internet" style="width:100%;margin-bottom:4px;">
+                <option>Encendido</option><option selected>Apagado</option>
+              </select>
+            </fieldset>
+
+            <fieldset style="border:1px solid #ccc;border-radius:6px;padding:6px;margin-bottom:8px;">
+              <legend>⚙️ Diagnóstico</legend>
+              <label>¿Router enciende?</label>
+              <select id="fbc-inc-router" style="width:100%;margin-bottom:4px;">
+                <option>SI</option><option>NO</option>
+              </select>
+              <label>¿Reinicio del router?</label>
+              <select id="fbc-inc-reinicio" style="width:100%;margin-bottom:4px;">
+                <option>SI</option><option>NO</option>
+              </select>
+              <label>¿Reset de palillo?</label>
+              <select id="fbc-inc-reset" style="width:100%;margin-bottom:4px;">
+                <option>NO</option><option>SI</option>
+              </select>
+              <label>¿Apagado 15 min router y ONT?</label>
+              <select id="fbc-inc-apagado" style="width:100%;margin-bottom:4px;">
+                <option>SI</option><option>NO</option>
+              </select>
+              <label>Comprobación de cableado:</label>
+              <textarea id="fbc-inc-cableado" style="width:100%;height:40px;margin-bottom:4px;">Todo OK</textarea>
+            </fieldset>
+          </div>
+
+          <!-- ─────────────────────────────────────────
+               FORMULARIO: BAJO SINCRONISMO
+          ───────────────────────────────────────── -->
+          <div id="fbc-form-bajo-sincronismo" style="display:none;">
+
+            <label>Nº OT (obligatorio):</label>
+            <input id="fbc-bs-ot" type="text" style="width:100%;margin-bottom:6px;">
+
+            <label>Instalación YMO:</label>
+            <select id="fbc-bs-ymo" style="width:100%;margin-bottom:6px;">
+              <option>NO</option><option>SI</option>
+            </select>
+
+            <label>Teléfono fijo servicio (opcional):</label>
+            <input id="fbc-bs-fijo" type="text" style="width:100%;margin-bottom:6px;">
+
+            <label>Teléfono móvil de contacto (obligatorio):</label>
+            <input id="fbc-bs-movil" type="text" style="width:100%;margin-bottom:6px;">
+
+            <label>Nombre de contacto (obligatorio):</label>
+            <input id="fbc-bs-nombre" type="text" style="width:100%;margin-bottom:6px;">
+
+            <label>Horario de contacto para pruebas (opcional):</label>
+            <input id="fbc-bs-horario" type="text" style="width:100%;margin-bottom:6px;">
+
+            <label>Información adicional:</label>
+            <textarea id="fbc-bs-info" style="width:100%;height:60px;margin-bottom:6px;">Se realiza diagnóstico en Schaman.</textarea>
+
+            <fieldset style="border:1px solid #ccc;border-radius:6px;padding:6px;margin-bottom:8px;">
+              <legend>🚀 Test de velocidad</legend>
+              <label>Id test (opcional):</label>
+              <input id="fbc-bs-idtest" type="text" style="width:100%;margin-bottom:4px;">
+            </fieldset>
+
+            <fieldset style="border:1px solid #ccc;border-radius:6px;padding:6px;margin-bottom:8px;">
+              <legend>💡 Luces router</legend>
+              <label>PON / DSL / WAN:</label>
+              <select id="fbc-bs-pon" style="width:100%;margin-bottom:2px;">
+                <option selected>Encendido</option><option>Apagado</option><option>Intermitente</option>
+              </select>
+              <div id="fbc-bs-pon-color-wrap" style="margin-bottom:6px;">
+                <select id="fbc-bs-pon-color" style="width:100%;"><option selected>Verde</option><option>Rojo</option></select>
+              </div>
+              <label>INTERNET / @:</label>
+              <select id="fbc-bs-internet" style="width:100%;margin-bottom:2px;">
+                <option selected>Encendido</option><option>Apagado</option><option>Intermitente</option>
+              </select>
+              <div id="fbc-bs-internet-color-wrap" style="margin-bottom:6px;">
+                <select id="fbc-bs-internet-color" style="width:100%;"><option selected>Verde</option><option>Rojo</option></select>
+              </div>
+              <label>LAN:</label>
+              <select id="fbc-bs-lan" style="width:100%;margin-bottom:2px;">
+                <option selected>Encendido</option><option>Apagado</option><option>Intermitente</option>
+              </select>
+              <div id="fbc-bs-lan-color-wrap" style="margin-bottom:6px;">
+                <select id="fbc-bs-lan-color" style="width:100%;"><option selected>Verde</option><option>Rojo</option></select>
+              </div>
+            </fieldset>
+
+            <fieldset style="border:1px solid #ccc;border-radius:6px;padding:6px;margin-bottom:8px;">
+              <legend>📝 Descripción del problema</legend>
+              <textarea id="fbc-bs-descripcion" style="width:100%;height:70px;margin-bottom:4px;"
+                placeholder="Indica si es Puntual o en cualquier momento y cualquier información relevante no cumplimentada"></textarea>
+            </fieldset>
+
+            <label>Conexión realizada por:</label>
+            <select id="fbc-bs-conexion" style="width:100%;margin-bottom:10px;">
+              <option>Cable</option>
+            </select>
+          </div>
+
+          <!-- ─────────────────────────────────────────
+               FORMULARIO: NO NAVEGA CABLE
+          ───────────────────────────────────────── -->
+          <div id="fbc-form-no-navega-cable" style="display:none;">
+
+            <label>Nº OT (obligatorio):</label>
+            <input id="fbc-nnc-ot" type="text" style="width:100%;margin-bottom:6px;">
+
+            <label>Instalación YMO:</label>
+            <select id="fbc-nnc-ymo" style="width:100%;margin-bottom:6px;">
+              <option>NO</option><option>SI</option>
+            </select>
+
+            <label>Teléfono fijo servicio (opcional):</label>
+            <input id="fbc-nnc-fijo" type="text" style="width:100%;margin-bottom:6px;">
+
+            <label>Teléfono móvil de contacto (obligatorio):</label>
+            <input id="fbc-nnc-movil" type="text" style="width:100%;margin-bottom:6px;">
+
+            <label>Nombre de contacto (obligatorio):</label>
+            <input id="fbc-nnc-nombre" type="text" style="width:100%;margin-bottom:6px;">
+
+            <label>Horario de contacto para pruebas (opcional):</label>
+            <input id="fbc-nnc-horario" type="text" style="width:100%;margin-bottom:6px;">
+
+            <label>Información adicional:</label>
+            <textarea id="fbc-nnc-info" style="width:100%;height:60px;margin-bottom:6px;">Se realiza diagnóstico en Schaman.</textarea>
+
+            <fieldset style="border:1px solid #ccc;border-radius:6px;padding:6px;margin-bottom:8px;">
+              <legend>💡 Luces router</legend>
+              <label>PWR / POWER:</label>
+              <select id="fbc-nnc-pwr" style="width:100%;margin-bottom:2px;">
+                <option selected>Encendido</option><option>Apagado</option><option>Intermitente</option>
+              </select>
+              <div id="fbc-nnc-pwr-color-wrap" style="margin-bottom:6px;">
+                <select id="fbc-nnc-pwr-color" style="width:100%;"><option selected>Verde</option><option>Rojo</option></select>
+              </div>
+              <label>PON / DSL / WAN:</label>
+              <select id="fbc-nnc-pon" style="width:100%;margin-bottom:2px;">
+                <option selected>Encendido</option><option>Apagado</option><option>Intermitente</option>
+              </select>
+              <div id="fbc-nnc-pon-color-wrap" style="margin-bottom:6px;">
+                <select id="fbc-nnc-pon-color" style="width:100%;"><option selected>Verde</option><option>Rojo</option></select>
+              </div>
+              <label>INTERNET / @:</label>
+              <select id="fbc-nnc-internet" style="width:100%;margin-bottom:2px;">
+                <option selected>Encendido</option><option>Apagado</option><option>Intermitente</option>
+              </select>
+              <div id="fbc-nnc-internet-color-wrap" style="margin-bottom:6px;">
+                <select id="fbc-nnc-internet-color" style="width:100%;"><option selected>Verde</option><option>Rojo</option></select>
+              </div>
+              <label>LAN:</label>
+              <select id="fbc-nnc-lan" style="width:100%;margin-bottom:2px;">
+                <option selected>Encendido</option><option>Apagado</option><option>Intermitente</option>
+              </select>
+              <div id="fbc-nnc-lan-color-wrap" style="margin-bottom:6px;">
+                <select id="fbc-nnc-lan-color" style="width:100%;"><option selected>Verde</option><option>Rojo</option></select>
+              </div>
+            </fieldset>
+
+            <fieldset style="border:1px solid #ccc;border-radius:6px;padding:6px;margin-bottom:8px;">
+              <legend>📝 Descripción del problema</legend>
+              <textarea id="fbc-nnc-descripcion" style="width:100%;height:70px;margin-bottom:4px;"
+                placeholder="Descripción del problema y pruebas que has realizado"></textarea>
+            </fieldset>
+          </div>
+
+          <!-- ─────────────────────────────────────────
+               FORMULARIO: CORTES FTTH
+          ───────────────────────────────────────── -->
+          <div id="fbc-form-cortes-ftth" style="display:none;">
+
+            <label>Nº OT (obligatorio):</label>
+            <input id="fbc-cft-ot" type="text" style="width:100%;margin-bottom:6px;">
+
+            <label>Instalación YMO:</label>
+            <select id="fbc-cft-ymo" style="width:100%;margin-bottom:6px;">
+              <option>NO</option><option>SI</option>
+            </select>
+
+            <label>Teléfono fijo servicio (opcional):</label>
+            <input id="fbc-cft-fijo" type="text" style="width:100%;margin-bottom:6px;">
+
+            <label>Teléfono móvil de contacto (obligatorio):</label>
+            <input id="fbc-cft-movil" type="text" style="width:100%;margin-bottom:6px;">
+
+            <label>Nombre de contacto (obligatorio):</label>
+            <input id="fbc-cft-nombre" type="text" style="width:100%;margin-bottom:6px;">
+
+            <label>Horario de contacto para pruebas (opcional):</label>
+            <input id="fbc-cft-horario" type="text" style="width:100%;margin-bottom:6px;">
+
+            <label>Información adicional:</label>
+            <textarea id="fbc-cft-info" style="width:100%;height:60px;margin-bottom:6px;">Se realiza diagnóstico en Schaman.</textarea>
+
+            <fieldset style="border:1px solid #ccc;border-radius:6px;padding:6px;margin-bottom:8px;">
+              <legend>💡 Luces router</legend>
+              <label>PON / DSL / WAN:</label>
+              <select id="fbc-cft-pon" style="width:100%;margin-bottom:2px;">
+                <option selected>Encendido</option><option>Apagado</option><option>Intermitente</option>
+              </select>
+              <div id="fbc-cft-pon-color-wrap" style="margin-bottom:6px;">
+                <select id="fbc-cft-pon-color" style="width:100%;"><option selected>Verde</option><option>Rojo</option></select>
+              </div>
+              <label>INTERNET / @:</label>
+              <select id="fbc-cft-internet" style="width:100%;margin-bottom:2px;">
+                <option selected>Encendido</option><option>Apagado</option><option>Intermitente</option>
+              </select>
+              <div id="fbc-cft-internet-color-wrap" style="margin-bottom:6px;">
+                <select id="fbc-cft-internet-color" style="width:100%;"><option selected>Verde</option><option>Rojo</option></select>
+              </div>
+              <label>LAN:</label>
+              <select id="fbc-cft-lan" style="width:100%;margin-bottom:2px;">
+                <option selected>Encendido</option><option>Apagado</option><option>Intermitente</option>
+              </select>
+              <div id="fbc-cft-lan-color-wrap" style="margin-bottom:6px;">
+                <select id="fbc-cft-lan-color" style="width:100%;"><option selected>Verde</option><option>Rojo</option></select>
+              </div>
+              <label>WIFI / WLAN:</label>
+              <select id="fbc-cft-wifi" style="width:100%;margin-bottom:2px;">
+                <option selected>Encendido</option><option>Apagado</option><option>Intermitente</option>
+              </select>
+              <div id="fbc-cft-wifi-color-wrap" style="margin-bottom:6px;">
+                <select id="fbc-cft-wifi-color" style="width:100%;"><option selected>Verde</option><option>Rojo</option></select>
+              </div>
+            </fieldset>
+
+            <fieldset style="border:1px solid #ccc;border-radius:6px;padding:6px;margin-bottom:8px;">
+              <legend>📝 Descripción del problema</legend>
+              <textarea id="fbc-cft-descripcion" style="width:100%;height:70px;margin-bottom:4px;"
+                placeholder="Descripción del problema y pruebas que has realizado"></textarea>
+            </fieldset>
+          </div>
+
+          <!-- ─────────────────────────────────────────
+               FORMULARIO: AVERÍA WIFI
+          ───────────────────────────────────────── -->
+          <div id="fbc-form-averia-wifi" style="display:none;">
+
+            <label>Nº OT (obligatorio):</label>
+            <input id="fbc-aw-ot" type="text" style="width:100%;margin-bottom:6px;">
+
+            <label>Instalación YMO:</label>
+            <select id="fbc-aw-ymo" style="width:100%;margin-bottom:6px;">
+              <option>NO</option><option>SI</option>
+            </select>
+
+            <label>Teléfono fijo servicio (opcional):</label>
+            <input id="fbc-aw-fijo" type="text" style="width:100%;margin-bottom:6px;">
+
+            <label>Teléfono móvil de contacto (obligatorio):</label>
+            <input id="fbc-aw-movil" type="text" style="width:100%;margin-bottom:6px;">
+
+            <label>Nombre de contacto (obligatorio):</label>
+            <input id="fbc-aw-nombre" type="text" style="width:100%;margin-bottom:6px;">
+
+            <label>Horario de contacto para pruebas (opcional):</label>
+            <input id="fbc-aw-horario" type="text" style="width:100%;margin-bottom:6px;">
+
+            <label>Información adicional:</label>
+            <textarea id="fbc-aw-info" style="width:100%;height:60px;margin-bottom:6px;">Se realiza diagnóstico en Schaman.</textarea>
+
+            <label>¿Cliente ha reiniciado el router de la corriente?</label>
+            <select id="fbc-aw-reinicio" style="width:100%;margin-bottom:6px;">
+              <option selected>SI</option><option>NO</option>
+            </select>
+
+            <label>Dispositivo de prueba (opcional):</label>
+            <textarea id="fbc-aw-dispositivo" style="width:100%;height:40px;margin-bottom:8px;"
+              placeholder="Indica el tipo de dispositivo"></textarea>
+
+            <fieldset style="border:1px solid #ccc;border-radius:6px;padding:6px;margin-bottom:8px;">
+              <legend>⚠️ Fallos</legend>
+              <label>Lentitud:</label>
+              <select id="fbc-aw-lentitud" style="width:100%;margin-bottom:4px;"><option>SI</option><option>NO</option></select>
+              <label>Cortes:</label>
+              <select id="fbc-aw-cortes" style="width:100%;margin-bottom:4px;"><option>SI</option><option>NO</option></select>
+              <label>No conecta con:</label>
+              <select id="fbc-aw-banda" style="width:100%;margin-bottom:4px;"><option>2,4GHz</option><option>5GHz</option><option>Ambas</option></select>
+              <label>Dispositivo IoT:</label>
+              <select id="fbc-aw-iot" style="width:100%;margin-bottom:4px;"><option>SI</option><option>NO</option></select>
+              <label>Conectado AP:</label>
+              <select id="fbc-aw-ap" style="width:100%;margin-bottom:4px;"><option>NO</option><option>SI</option></select>
+            </fieldset>
+
+            <fieldset style="border:1px solid #ccc;border-radius:6px;padding:6px;margin-bottom:8px;">
+              <legend>📝 Descripción del problema</legend>
+              <textarea id="fbc-aw-descripcion" style="width:100%;height:70px;margin-bottom:4px;"
+                placeholder="Descripción del problema y pruebas que has realizado"></textarea>
+            </fieldset>
+          </div>
+
+          <button type="button" id="fbc-copiar-community" style="width:100%;background:#6c757d;color:white;border:none;padding:8px;font-weight:bold;border-radius:6px;cursor:pointer;margin-bottom:10px;">📋 Copiar Community</button>
+        </div>
+        <!-- fin fbc-bloque-tipologia -->
+
+        <!-- ─────────────────────────────────────────
+             FIBRA VERDE / FIBRA NARANJA — formulario genérico con Niveles/Equipos
+        ───────────────────────────────────────── -->
+        <div id="fbc-bloque-generico-niveles" style="display:none;">
+          <label><b>Descripción:</b></label><br>
+          <textarea id="fbc-gen-descripcion" rows="3" style="width:100%;margin-bottom:10px;box-sizing:border-box;"></textarea>
+
+          <label><b>Niveles / Equipos:</b></label><br>
+          <textarea id="fbc-gen-niveles" rows="2" style="width:100%;margin-bottom:10px;box-sizing:border-box;"></textarea>
+
+          <label><b>Pruebas realizadas:</b></label><br>
+          <textarea id="fbc-gen-pruebas" rows="3" style="width:100%;margin-bottom:10px;box-sizing:border-box;"></textarea>
+        </div>
+
+        <!-- ─────────────────────────────────────────
+             FIBRA AZUL — formulario genérico sin Niveles/Equipos
+        ───────────────────────────────────────── -->
+        <div id="fbc-bloque-generico-sinniveles" style="display:none;">
+          <label><b>Descripción:</b></label><br>
+          <textarea id="fbc-gen2-descripcion" rows="3" style="width:100%;margin-bottom:10px;box-sizing:border-box;"></textarea>
+
+          <label><b>Pruebas realizadas:</b></label><br>
+          <textarea id="fbc-gen2-pruebas" rows="3" style="width:100%;margin-bottom:10px;box-sizing:border-box;"></textarea>
+        </div>
+
+        <div id="fbc-bloque-info-adicional-nueva" style="display:none;">
+          <label><b>Información adicional <span style="font-weight:normal;">(interno Gossan)</span>:</b></label><br>
+          <textarea id="fbc-info-adicional-nueva" rows="2" style="width:100%;margin-bottom:10px;box-sizing:border-box;"></textarea>
+        </div>
+
+        <label><b>Estado:</b></label><br>
+        <select id="fbc-estadoNueva" style="width:100%;margin-bottom:8px;">
+          <option value="">Seleccione estado</option>
+          <option value="inicial">INICIAL</option>
+          <option value="pte_cliente">PENDIENTE CLIENTE</option>
+          <option value="pte_proveedor">PENDIENTE PROVEEDOR</option>
+          <option value="pte_atc">PENDIENTE ATC</option>
+          <option value="pte_interno">PENDIENTE INTERNO</option>
+          <option value="final">FINAL</option>
         </select>
 
-        <label>INTERNET / @:</label>
-        <select id="fb-internet" style="width:100%;margin-bottom:4px;">
-          <option>Encendido</option>
-          <option selected>Apagado</option>
+        <!-- Sub PENDIENTE CLIENTE -->
+        <div id="fbc-subClienteNueva" style="display:none;margin-bottom:10px;padding:8px;border:1px solid #cce0ff;border-radius:6px;background:#f0f7ff;">
+          <label><b>Situación:</b></label><br>
+          <select id="fbc-situacionClienteNueva" style="width:100%;margin-bottom:8px;">
+            <option value="">Seleccione...</option>
+            <option value="no_localizado">No localizado</option>
+            <option value="pendiente_pruebas">Pendiente pruebas</option>
+          </select>
+
+          <div id="fbc-bloqueNoLocNueva" style="display:none;">
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:6px;">
+              <input type="checkbox" id="fbc-waNoLocNueva"> Se envía WhatsApp
+            </label>
+            <div id="fbc-bloqueWaNumNoLocNueva" style="display:none;margin-bottom:8px;">
+              <label>Número:</label><br>
+              <input type="text" id="fbc-waNumNoLocNueva" placeholder="Ej: 612345678" style="width:100%;box-sizing:border-box;">
+            </div>
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:6px;">
+              <input type="checkbox" id="fbc-citarNoLocNueva"> Citar (volver a llamar)
+            </label>
+            <div id="fbc-bloqueCitaNoLocNueva" style="display:none;margin-bottom:8px;">
+              <label>Fecha:</label>
+              <input type="date" id="fbc-citaFechaNoLocNueva" style="margin-right:6px;">
+              <label>Hora:</label>
+              <input type="time" id="fbc-citaHoraNoLocNueva">
+            </div>
+          </div>
+
+          <div id="fbc-bloquePruebasNueva" style="display:none;">
+            <label><b>Canal:</b></label><br>
+            <select id="fbc-canalPruebasNueva" style="width:100%;margin-bottom:8px;">
+              <option value="">Seleccione...</option>
+              <option value="cita">Cita (llamar de nuevo)</option>
+              <option value="whatsapp">WhatsApp</option>
+            </select>
+
+            <div id="fbc-bloqueCitaPruebasNueva" style="display:none;margin-bottom:8px;">
+              <label>Fecha:</label>
+              <input type="date" id="fbc-citaFechaPruebasNueva" style="margin-right:6px;">
+              <label>Hora:</label>
+              <input type="time" id="fbc-citaHoraPruebasNueva">
+            </div>
+
+            <div id="fbc-bloqueWaPruebasNueva" style="display:none;margin-bottom:8px;">
+              <label>Número:</label><br>
+              <input type="text" id="fbc-waNumPruebasNueva" placeholder="Ej: 612345678" style="width:100%;box-sizing:border-box;">
+            </div>
+          </div>
+        </div>
+
+        <!-- Sub PENDIENTE PROVEEDOR -->
+        <div id="fbc-subProveedorNueva" style="display:none;margin-bottom:10px;padding:8px;border:1px solid #ffd6a5;border-radius:6px;background:#fff8ee;">
+          <label><b>Tipo:</b></label><br>
+          <select id="fbc-tipoProveedorNueva" style="width:100%;margin-bottom:8px;">
+            <option value="esperando">Esperando respuesta</option>
+            <option value="masiva">Afectado por incidencia masiva</option>
+          </select>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:6px;">
+            <input type="checkbox" id="fbc-reclamaProveedorNueva"> Se reclama a proveedor
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:8px;">
+            <input type="checkbox" id="fbc-escalaProveedorNueva"> Se escala
+          </label>
+          <div id="fbc-bloqueTicketProveedorNueva">
+            <label><b>Nº ticket proveedor:</b></label><br>
+            <input type="text" id="fbc-ticketProveedorNueva" placeholder="Ej: TK-98765" style="width:100%;margin-bottom:8px;box-sizing:border-box;">
+          </div>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:6px;">
+            <input type="checkbox" id="fbc-citarProveedorNueva"> Cita (revisar el caso)
+          </label>
+          <div id="fbc-bloqueCitaProveedorNueva" style="display:none;margin-bottom:4px;">
+            <label>Fecha:</label>
+            <input type="date" id="fbc-citaFechaProveedorNueva" style="margin-right:6px;">
+            <label>Hora:</label>
+            <input type="time" id="fbc-citaHoraProveedorNueva">
+          </div>
+        </div>
+
+        <!-- Sub PENDIENTE ATC / INTERNO -->
+        <div id="fbc-subAtcInternoNueva" style="display:none;margin-bottom:10px;padding:8px;border:1px solid #ddd;border-radius:6px;background:#fafafa;">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:6px;">
+            <input type="checkbox" id="fbc-citarAtcInternoNueva"> Cita (revisar el caso)
+          </label>
+          <div id="fbc-bloqueCitaAtcInternoNueva" style="display:none;">
+            <label>Fecha:</label>
+            <input type="date" id="fbc-citaFechaAtcInternoNueva" style="margin-right:6px;">
+            <label>Hora:</label>
+            <input type="time" id="fbc-citaHoraAtcInternoNueva">
+          </div>
+        </div>
+
+        <!-- Sub FINAL -->
+        <div id="fbc-subFinalNueva" style="display:none;margin-bottom:10px;padding:8px;border:1px solid #b9e4c9;border-radius:6px;background:#f2fbf5;">
+          <label><b>Motivo de cierre:</b></label><br>
+          <select id="fbc-motivoFinalNueva" style="width:100%;">
+            <option value="">Seleccione...</option>
+            <option value="solucionada">Solucionada</option>
+            <option value="no_localizado_48h">No localizado tras 48h</option>
+            <option value="incidencia_masiva">Cierre por incidencia masiva</option>
+            <option value="pendiente_comprobacion">Pendiente comprobación</option>
+            <option value="sin_problema">No tiene problemas con el servicio</option>
+          </select>
+        </div>
+
+        <div id="fbc-bloque-prioridad-nueva" style="display:none;margin:12px 0;">
+          <label><b>Prioridad:</b></label><br>
+          <select id="fbc-prioridad-nueva" style="width:100%;">
+            <option value="">Seleccione prioridad</option>
+            <option value="ALTA">🔴 Alta</option>
+            <option value="MEDIA">🟠 Media</option>
+            <option value="BAJA">🟢 Baja</option>
+          </select>
+        </div>
+
+        <label style="display:flex;align-items:center;gap:8px;margin-bottom:8px;cursor:pointer;">
+          <input type="checkbox" id="fbc-cbContactoNueva"> <b>Añadir número de contacto</b>
+        </label>
+        <div id="fbc-bloqueContactoNueva" style="display:none;margin-bottom:10px;">
+          <input type="text" id="fbc-telContactoNueva" placeholder="Ej: 612345678" style="width:100%;box-sizing:border-box;">
+        </div>
+
+        <button id="fbc-btn-generar-nueva" style="
+          width:100%;background:#007bff;color:white;
+          border:none;padding:8px;border-radius:6px;cursor:pointer;
+          transition:background 0.3s;">
+          📝 Generar resultado
+        </button>
+      </div>
+
+      <!-- ═══════════════════════════════════════════════════
+           BLOQUE: ACTUALIZACIÓN
+      ════════════════════════════════════════════════════ -->
+      <div id="fbc-bloque-actualizacion" style="display:none;">
+
+        <label style="display:flex;align-items:center;gap:8px;margin-bottom:6px;cursor:pointer;">
+          <input type="checkbox" id="fbc-act-hija"> <b>Incidencia hija</b>
+        </label>
+        <div id="fbc-act-hija-bloque" style="display:none;margin-bottom:8px;">
+          <label>Nº incidencia madre:</label>
+          <input id="fbc-act-madre" type="text" placeholder="Ej: INC-00123" style="width:100%;margin-bottom:6px;">
+        </div>
+
+        <label style="display:flex;align-items:center;gap:8px;margin-bottom:6px;cursor:pointer;">
+          <input type="checkbox" id="fbc-act-cb-info"> <b>Información adicional</b>
+        </label>
+        <div id="fbc-act-info-bloque" style="display:none;margin-bottom:8px;">
+          <textarea id="fbc-act-info" rows="2" style="width:100%;box-sizing:border-box;"
+            placeholder="Información adicional de la gestión..."></textarea>
+        </div>
+
+        <label style="display:flex;align-items:center;gap:8px;margin-bottom:6px;cursor:pointer;">
+          <input type="checkbox" id="fbc-act-cb-prov"> <b>Actualización proveedor</b>
+        </label>
+        <div id="fbc-act-prov-bloque" style="display:none;margin-bottom:8px;">
+          <textarea id="fbc-act-prov" rows="2" style="width:100%;box-sizing:border-box;"
+            placeholder="Respuesta o novedad del proveedor..."></textarea>
+        </div>
+
+        <label style="display:flex;align-items:center;gap:8px;margin-bottom:6px;cursor:pointer;">
+          <input type="checkbox" id="fbc-act-cb-pruebas"> <b>Pruebas adicionales</b>
+        </label>
+        <div id="fbc-act-pruebas-bloque" style="display:none;margin-bottom:8px;">
+          <textarea id="fbc-act-pruebas" rows="2" style="width:100%;box-sizing:border-box;"
+            placeholder="Pruebas realizadas en esta gestión..."></textarea>
+        </div>
+
+        <label><b>Estado:</b></label><br>
+        <select id="fbc-estadoAct" style="width:100%;margin-bottom:8px;">
+          <option value="">Seleccione estado</option>
+          <option value="inicial">INICIAL</option>
+          <option value="pte_cliente">PENDIENTE CLIENTE</option>
+          <option value="pte_proveedor">PENDIENTE PROVEEDOR</option>
+          <option value="pte_atc">PENDIENTE ATC</option>
+          <option value="pte_interno">PENDIENTE INTERNO</option>
+          <option value="final">FINAL</option>
         </select>
-      </fieldset>
 
-      <fieldset style="border:1px solid #ccc;border-radius:6px;padding:6px;margin-bottom:8px;">
-        <legend>⚙️ Diagnóstico</legend>
+        <!-- Sub PENDIENTE CLIENTE -->
+        <div id="fbc-subClienteAct" style="display:none;margin-bottom:10px;padding:8px;border:1px solid #cce0ff;border-radius:6px;background:#f0f7ff;">
+          <label><b>Situación:</b></label><br>
+          <select id="fbc-situacionClienteAct" style="width:100%;margin-bottom:8px;">
+            <option value="">Seleccione...</option>
+            <option value="no_localizado">No localizado</option>
+            <option value="pendiente_pruebas">Pendiente pruebas</option>
+          </select>
 
-        <label>¿Router enciende?</label>
-        <select id="fb-router" style="width:100%;margin-bottom:4px;">
-          <option selected>SI</option>
-          <option>NO</option>
-        </select>
+          <div id="fbc-bloqueNoLocAct" style="display:none;">
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:6px;">
+              <input type="checkbox" id="fbc-waNoLocAct"> Se envía WhatsApp
+            </label>
+            <div id="fbc-bloqueWaNumNoLocAct" style="display:none;margin-bottom:8px;">
+              <label>Número:</label><br>
+              <input type="text" id="fbc-waNumNoLocAct" placeholder="Ej: 612345678" style="width:100%;box-sizing:border-box;">
+            </div>
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:6px;">
+              <input type="checkbox" id="fbc-citarNoLocAct"> Citar (volver a llamar)
+            </label>
+            <div id="fbc-bloqueCitaNoLocAct" style="display:none;margin-bottom:8px;">
+              <label>Fecha:</label>
+              <input type="date" id="fbc-citaFechaNoLocAct" style="margin-right:6px;">
+              <label>Hora:</label>
+              <input type="time" id="fbc-citaHoraNoLocAct">
+            </div>
+          </div>
 
-        <label>¿Reinicio del router?</label>
-        <select id="fb-reinicio" style="width:100%;margin-bottom:4px;">
-          <option selected>SI</option>
-          <option>NO</option>
-        </select>
+          <div id="fbc-bloquePruebasAct" style="display:none;">
+            <label><b>Canal:</b></label><br>
+            <select id="fbc-canalPruebasAct" style="width:100%;margin-bottom:8px;">
+              <option value="">Seleccione...</option>
+              <option value="cita">Cita (llamar de nuevo)</option>
+              <option value="whatsapp">WhatsApp</option>
+            </select>
 
-        <label>¿Reset de palillo?</label>
-        <select id="fb-reset" style="width:100%;margin-bottom:4px;">
-          <option>SI</option>
-          <option selected>NO</option>
-        </select>
+            <div id="fbc-bloqueCitaPruebasAct" style="display:none;margin-bottom:8px;">
+              <label>Fecha:</label>
+              <input type="date" id="fbc-citaFechaPruebasAct" style="margin-right:6px;">
+              <label>Hora:</label>
+              <input type="time" id="fbc-citaHoraPruebasAct">
+            </div>
 
-        <label>¿Apagado 15 min router y ONT?</label>
-        <select id="fb-apagado" style="width:100%;margin-bottom:4px;">
-          <option selected>SI</option>
-          <option>NO</option>
-        </select>
+            <div id="fbc-bloqueWaPruebasAct" style="display:none;margin-bottom:8px;">
+              <label>Número:</label><br>
+              <input type="text" id="fbc-waNumPruebasAct" placeholder="Ej: 612345678" style="width:100%;box-sizing:border-box;">
+            </div>
+          </div>
+        </div>
 
-        <label>Comprobación de cableado:</label>
-        <textarea id="fb-cableado" style="width:100%;height:40px;">Todo OK</textarea>
-      </fieldset>
+        <!-- Sub PENDIENTE PROVEEDOR -->
+        <div id="fbc-subProveedorAct" style="display:none;margin-bottom:10px;padding:8px;border:1px solid #ffd6a5;border-radius:6px;background:#fff8ee;">
+          <label><b>Tipo:</b></label><br>
+          <select id="fbc-tipoProveedorAct" style="width:100%;margin-bottom:8px;">
+            <option value="esperando">Esperando respuesta</option>
+            <option value="masiva">Afectado por incidencia masiva</option>
+          </select>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:6px;">
+            <input type="checkbox" id="fbc-reclamaProveedorAct"> Se reclama a proveedor
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:8px;">
+            <input type="checkbox" id="fbc-escalaProveedorAct"> Se escala
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:6px;">
+            <input type="checkbox" id="fbc-cbTicketAct"> Añadir ticket operador
+          </label>
+          <div id="fbc-bloqueTicketProveedorAct" style="display:none;">
+            <label><b>Nº ticket proveedor:</b></label><br>
+            <input type="text" id="fbc-ticketProveedorAct" placeholder="Ej: TK-98765" style="width:100%;margin-bottom:8px;box-sizing:border-box;">
+          </div>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:6px;">
+            <input type="checkbox" id="fbc-citarProveedorAct"> Cita (revisar el caso)
+          </label>
+          <div id="fbc-bloqueCitaProveedorAct" style="display:none;margin-bottom:4px;">
+            <label>Fecha:</label>
+            <input type="date" id="fbc-citaFechaProveedorAct" style="margin-right:6px;">
+            <label>Hora:</label>
+            <input type="time" id="fbc-citaHoraProveedorAct">
+          </div>
+        </div>
 
-      <button id="fb-generar" style="
-        width:100%;
-        background:#007bff;
-        color:white;
-        border:none;
-        padding:8px;
-        font-weight:bold;
-        border-radius:6px;
-        cursor:pointer;
-      ">📋 Copiar resultado Community</button>
+        <!-- Sub PENDIENTE ATC / INTERNO -->
+        <div id="fbc-subAtcInternoAct" style="display:none;margin-bottom:10px;padding:8px;border:1px solid #ddd;border-radius:6px;background:#fafafa;">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:6px;">
+            <input type="checkbox" id="fbc-citarAtcInternoAct"> Cita (revisar el caso)
+          </label>
+          <div id="fbc-bloqueCitaAtcInternoAct" style="display:none;">
+            <label>Fecha:</label>
+            <input type="date" id="fbc-citaFechaAtcInternoAct" style="margin-right:6px;">
+            <label>Hora:</label>
+            <input type="time" id="fbc-citaHoraAtcInternoAct">
+          </div>
+        </div>
+
+        <!-- Sub FINAL -->
+        <div id="fbc-subFinalAct" style="display:none;margin-bottom:10px;padding:8px;border:1px solid #b9e4c9;border-radius:6px;background:#f2fbf5;">
+          <label><b>Motivo de cierre:</b></label><br>
+          <select id="fbc-motivoFinalAct" style="width:100%;">
+            <option value="">Seleccione...</option>
+            <option value="solucionada">Solucionada</option>
+            <option value="no_localizado_48h">No localizado tras 48h</option>
+            <option value="incidencia_masiva">Cierre por incidencia masiva</option>
+            <option value="pendiente_comprobacion">Pendiente comprobación</option>
+            <option value="sin_problema">No tiene problemas con el servicio</option>
+          </select>
+        </div>
+
+        <label style="display:flex;align-items:center;gap:8px;margin:8px 0;cursor:pointer;">
+          <input type="checkbox" id="fbc-act-cambiar-prioridad"> <b>Cambiar prioridad</b>
+        </label>
+        <div id="fbc-act-bloque-prioridad" style="display:none;margin-bottom:12px;">
+          <select id="fbc-act-prioridad" style="width:100%;">
+            <option value="">Seleccione prioridad</option>
+            <option value="ALTA">🔴 Alta</option>
+            <option value="MEDIA">🟠 Media</option>
+            <option value="BAJA">🟢 Baja</option>
+          </select>
+        </div>
+
+        <label style="display:flex;align-items:center;gap:8px;margin-bottom:8px;cursor:pointer;">
+          <input type="checkbox" id="fbc-act-cbContacto"> <b>Añadir número de contacto</b>
+        </label>
+        <div id="fbc-act-bloqueContacto" style="display:none;margin-bottom:10px;">
+          <input type="text" id="fbc-act-telContacto" placeholder="Ej: 612345678" style="width:100%;box-sizing:border-box;">
+        </div>
+
+        <button id="fbc-act-pegar" style="
+          width:100%;background:#007bff;color:white;border:none;
+          padding:8px;font-weight:bold;border-radius:6px;cursor:pointer;margin-top:8px;">
+          📝 Pegar Gossan
+        </button>
+      </div>
     `;
 
-    // Añadimos la función del botón
-    contenedor.querySelector('#fb-generar').addEventListener('click', () => {
-      // Campos
-      const ot = document.getElementById('fb-ot').value.trim();
-      const fijo = document.getElementById('fb-fijo').value.trim();
-      const movil = document.getElementById('fb-movil').value.trim();
-      const nombre = document.getElementById('fb-nombre').value.trim();
-      const horario = document.getElementById('fb-horario').value.trim();
-      const info = document.getElementById('fb-info').value.trim();
-      const pwr = document.getElementById('fb-pwr').value.trim();
-      const pon = document.getElementById('fb-pon').value.trim();
-      const los = document.getElementById('fb-los').value.trim();
-      const internet = document.getElementById('fb-internet').value.trim();
-      const router = document.getElementById('fb-router').value.trim();
-      const reinicio = document.getElementById('fb-reinicio').value.trim();
-      const reset = document.getElementById('fb-reset').value.trim();
-      const apagado = document.getElementById('fb-apagado').value.trim();
-      const cableado = document.getElementById('fb-cableado').value.trim();
+      // ── Helper: mapeos Estado/Prioridad Gossan (idéntico a incidenciaServicio móvil) ──
+      const ESTADO_GOSSAN = { inicial: 1, pte_cliente: 23, pte_proveedor: 24, pte_atc: 22, pte_interno: 22, final: 2 };
+      const PRIORIDAD_GOSSAN = { ALTA: 1, MEDIA: 3, BAJA: 2 };
 
-      // Validaciones mínimas
-      if (!ot || !movil || !nombre) {
-        alert('⚠️ Faltan campos obligatorios: Nº OT, Teléfono móvil y Nombre de contacto.');
-        return;
+      function buscarSelectPrioridad() {
+        return [...document.querySelectorAll('select[id*="formIncidencia"]')]
+          .find(s => {
+            const opts = [...s.options];
+            return opts.some(o => o.value === '3' && o.text.trim() === 'MEDIA')
+                && opts.some(o => o.value === '2' && o.text.trim() === 'BAJA');
+          });
       }
 
-      // Construcción del texto
-      const resultado =
-`Nº OT: ${ot}
-Instalación YMO: NO
-Teléfono fijo servicio: ${fijo}
-Teléfono móvil de contacto: ${movil}
-Nombre de contacto: ${nombre}
-Horario de contacto para pruebas en domicilio: ${horario}
-Información adicional: ${info}
+      function escribirEstadoYPrioridadGossan(estadoInterno, prioridadInterna) {
+        try {
+          if (typeof fvSetPFSelect !== 'function' || typeof fvFindSelectEstado !== 'function') {
+            console.warn('[FIBRAEXTERNA] fvSetPFSelect/fvFindSelectEstado no disponibles — no se escribe en Gossan.');
+            return;
+          }
+          const valorEstado = ESTADO_GOSSAN[estadoInterno];
+          if (valorEstado !== undefined) fvSetPFSelect(fvFindSelectEstado, valorEstado);
+          if (prioridadInterna) {
+            const valorPrioridad = PRIORIDAD_GOSSAN[prioridadInterna];
+            if (valorPrioridad !== undefined) fvSetPFSelect(buscarSelectPrioridad, valorPrioridad);
+          }
+        } catch (err) {
+          console.warn('[FIBRAEXTERNA] No se pudo escribir Estado/Prioridad en Gossan:', err);
+        }
+      }
+
+      // ── Helper: escritura real en Gossan del campo Cita (idéntico a incidenciaServicio) ──
+      function buscarPanelCita() {
+        return document.querySelector('[id*="fpanelcita"]');
+      }
+      function buscarCampoCitaFecha() {
+        const panel = buscarPanelCita();
+        return panel ? panel.querySelector('input.hasDatepicker') : null;
+      }
+      function buscarCampoCitaHora() {
+        const panel = buscarPanelCita();
+        if (!panel) return null;
+        const inputs = [...panel.querySelectorAll('input[type="text"]')];
+        return inputs.find(i => !i.classList.contains('hasDatepicker')) || null;
+      }
+      function escribirCitaGossan(fechaISO, horaHHMM) {
+        try {
+          if (!fechaISO) return;
+          const campoFecha = buscarCampoCitaFecha();
+          const campoHora = buscarCampoCitaHora();
+          if (!campoFecha) {
+            console.warn('[FIBRAEXTERNA] No se encontró el campo de Cita (fecha) en Gossan.');
+            return;
+          }
+          const [y, m, d] = fechaISO.split('-');
+          const fechaFmt = `${d}/${m}/${y}`;
+          campoFecha.value = fechaFmt;
+          ['input', 'change', 'blur'].forEach(ev => campoFecha.dispatchEvent(new Event(ev, { bubbles: true })));
+          try { window.jQuery && jQuery(campoFecha).datepicker('setDate', fechaFmt); } catch (_) {}
+
+          if (campoHora && horaHHMM) {
+            const horaFmt = horaHHMM.length === 5 ? `${horaHHMM}:00` : horaHHMM;
+            campoHora.value = horaFmt;
+            ['input', 'change', 'blur'].forEach(ev => campoHora.dispatchEvent(new Event(ev, { bubbles: true })));
+          }
+        } catch (err) {
+          console.warn('[FIBRAEXTERNA] No se pudo escribir la Cita en Gossan:', err);
+        }
+      }
+      function extraerCitaActiva(e) {
+        if (e.est === 'pte_cliente') {
+          if (e.situacion === 'no_localizado' && e.citarNoLoc && e.citaFechaNoLoc) {
+            return { fecha: e.citaFechaNoLoc, hora: e.citaHoraNoLoc };
+          }
+          if (e.situacion === 'pendiente_pruebas' && e.canalPruebas === 'cita' && e.citaFechaPruebas) {
+            return { fecha: e.citaFechaPruebas, hora: e.citaHoraPruebas };
+          }
+        }
+        if (e.est === 'pte_proveedor' && e.citarProveedor && e.citaFechaProveedor) {
+          return { fecha: e.citaFechaProveedor, hora: e.citaHoraProveedor };
+        }
+        if ((e.est === 'pte_atc' || e.est === 'pte_interno') && e.citarAtcInterno && e.citaFechaAtcInterno) {
+          return { fecha: e.citaFechaAtcInterno, hora: e.citaHoraAtcInterno };
+        }
+        return null;
+      }
+      function escribirCitaGossanSiAplica(e) {
+        const cita = extraerCitaActiva(e);
+        if (cita) escribirCitaGossan(cita.fecha, cita.hora);
+      }
+
+      function fmtFechaHora(fecha, hora) {
+        if (!fecha) return '';
+        const [y, m, d] = fecha.split('-');
+        return `${d}/${m}/${y}${hora ? ` a las ${hora}` : ''}`;
+      }
+
+      // ── Helper: leer/validar/construir texto del Estado (idéntico a incidenciaServicio) ──
+      function leerEstado(suf) {
+        return {
+          est: q(`fbc-estado${suf}`).value,
+          situacion: q(`fbc-situacionCliente${suf}`)?.value || '',
+          waNoLoc: q(`fbc-waNoLoc${suf}`)?.checked || false,
+          waNumNoLoc: q(`fbc-waNumNoLoc${suf}`)?.value.trim() || '',
+          citarNoLoc: q(`fbc-citarNoLoc${suf}`)?.checked || false,
+          citaFechaNoLoc: q(`fbc-citaFechaNoLoc${suf}`)?.value || '',
+          citaHoraNoLoc: q(`fbc-citaHoraNoLoc${suf}`)?.value || '',
+          canalPruebas: q(`fbc-canalPruebas${suf}`)?.value || '',
+          citaFechaPruebas: q(`fbc-citaFechaPruebas${suf}`)?.value || '',
+          citaHoraPruebas: q(`fbc-citaHoraPruebas${suf}`)?.value || '',
+          waNumPruebas: q(`fbc-waNumPruebas${suf}`)?.value.trim() || '',
+          tipoProveedor: q(`fbc-tipoProveedor${suf}`)?.value || 'esperando',
+          reclamaProveedor: q(`fbc-reclamaProveedor${suf}`)?.checked || false,
+          escalaProveedor: q(`fbc-escalaProveedor${suf}`)?.checked || false,
+          ticketProveedor: q(`fbc-ticketProveedor${suf}`)?.value.trim() || '',
+          ticketObligatorio: suf === 'Nueva' ? true : (q(`fbc-cbTicket${suf}`)?.checked || false),
+          citarProveedor: q(`fbc-citarProveedor${suf}`)?.checked || false,
+          citaFechaProveedor: q(`fbc-citaFechaProveedor${suf}`)?.value || '',
+          citaHoraProveedor: q(`fbc-citaHoraProveedor${suf}`)?.value || '',
+          citarAtcInterno: q(`fbc-citarAtcInterno${suf}`)?.checked || false,
+          citaFechaAtcInterno: q(`fbc-citaFechaAtcInterno${suf}`)?.value || '',
+          citaHoraAtcInterno: q(`fbc-citaHoraAtcInterno${suf}`)?.value || '',
+          motivoFinal: q(`fbc-motivoFinal${suf}`)?.value || ''
+        };
+      }
+
+      function buildTextoEstado(e) {
+        if (e.est === 'inicial') return 'INICIAL';
+
+        if (e.est === 'pte_cliente') {
+          let base = '';
+          if (e.situacion === 'no_localizado') {
+            base = 'no localizado';
+            if (e.waNoLoc && e.waNumNoLoc) base += `; WhatsApp enviado a ${e.waNumNoLoc}`;
+            if (e.citarNoLoc && e.citaFechaNoLoc) base += `; se cita el ${fmtFechaHora(e.citaFechaNoLoc, e.citaHoraNoLoc)}`;
+          } else if (e.situacion === 'pendiente_pruebas') {
+            base = 'pendiente pruebas';
+            if (e.canalPruebas === 'cita' && e.citaFechaPruebas) {
+              base += `; se cita el ${fmtFechaHora(e.citaFechaPruebas, e.citaHoraPruebas)}`;
+            } else if (e.canalPruebas === 'whatsapp' && e.waNumPruebas) {
+              base += `; WhatsApp enviado a ${e.waNumPruebas}`;
+            }
+          }
+          return `PTE CLIENTE (${base})`;
+        }
+
+        if (e.est === 'pte_proveedor') {
+          const d = [];
+          d.push(e.tipoProveedor === 'masiva' ? 'afectado por incidencia masiva' : 'esperando respuesta');
+          if (e.ticketProveedor) d.push(`ticket: ${e.ticketProveedor}`);
+          if (e.reclamaProveedor) d.push('reclamado a proveedor');
+          if (e.escalaProveedor) d.push('escalado');
+          if (e.citarProveedor && e.citaFechaProveedor) {
+            d.push(`revisión programada el ${fmtFechaHora(e.citaFechaProveedor, e.citaHoraProveedor)}`);
+          }
+          return `PTE PROVEEDOR (${d.join('; ')})`;
+        }
+
+        if (e.est === 'pte_atc' || e.est === 'pte_interno') {
+          const nombre = e.est === 'pte_atc' ? 'PTE ATC' : 'PTE INTERNO';
+          if (e.citarAtcInterno && e.citaFechaAtcInterno) {
+            return `${nombre} (revisión programada el ${fmtFechaHora(e.citaFechaAtcInterno, e.citaHoraAtcInterno)})`;
+          }
+          return nombre;
+        }
+
+        if (e.est === 'final') {
+          const map = {
+            solucionada: 'CIERRE: RESUELTA',
+            no_localizado_48h: 'CIERRE: no localizado tras 48h',
+            incidencia_masiva: 'CIERRE: incidencia masiva, informado al cliente',
+            pendiente_comprobacion: 'CIERRE: pendiente comprobación, baja urgencia',
+            sin_problema: 'CIERRE: no tiene problemas con el servicio'
+          };
+          return map[e.motivoFinal] || 'CIERRE';
+        }
+
+        return '';
+      }
+
+      function validarEstado(e) {
+        if (!e.est) return '⚠️ Selecciona el estado.';
+        if (e.est === 'pte_cliente') {
+          if (!e.situacion) return '⚠️ Selecciona la situación del cliente.';
+          if (e.situacion === 'no_localizado' && e.waNoLoc && !e.waNumNoLoc)
+            return '⚠️ Indica el número de WhatsApp.';
+          if (e.situacion === 'pendiente_pruebas') {
+            if (!e.canalPruebas) return '⚠️ Selecciona el canal (Cita o WhatsApp) para Pendiente pruebas.';
+            if (e.canalPruebas === 'cita' && !e.citaFechaPruebas) return '⚠️ Indica la fecha de la cita.';
+            if (e.canalPruebas === 'whatsapp' && !e.waNumPruebas) return '⚠️ Indica el número de WhatsApp.';
+          }
+        }
+        if (e.est === 'pte_proveedor' && e.ticketObligatorio && !e.ticketProveedor) {
+          return '⚠️ Indica el número de ticket del proveedor.';
+        }
+        if (e.est === 'final' && !e.motivoFinal) {
+          return '⚠️ Selecciona el motivo de cierre.';
+        }
+        return null;
+      }
+
+      function conectarEstado(suf) {
+        const estadoSel      = q(`fbc-estado${suf}`);
+        const subCliente     = q(`fbc-subCliente${suf}`);
+        const subProveedor   = q(`fbc-subProveedor${suf}`);
+        const subAtcInterno  = q(`fbc-subAtcInterno${suf}`);
+        const subFinal       = q(`fbc-subFinal${suf}`);
+        const bloquePrioridad = suf === 'Nueva' ? q('fbc-bloque-prioridad-nueva') : q('fbc-act-bloque-prioridad');
+
+        estadoSel.addEventListener('change', () => {
+          const est = estadoSel.value;
+          subCliente.style.display    = est === 'pte_cliente'   ? 'block' : 'none';
+          subProveedor.style.display  = est === 'pte_proveedor' ? 'block' : 'none';
+          subAtcInterno.style.display = (est === 'pte_atc' || est === 'pte_interno') ? 'block' : 'none';
+          subFinal.style.display      = est === 'final' ? 'block' : 'none';
+          if (suf === 'Nueva' && bloquePrioridad) {
+            bloquePrioridad.style.display = (est && est !== 'final') ? 'block' : 'none';
+          }
+        });
+
+        const situacionSel = q(`fbc-situacionCliente${suf}`);
+        situacionSel.addEventListener('change', () => {
+          const val = situacionSel.value;
+          q(`fbc-bloqueNoLoc${suf}`).style.display = val === 'no_localizado' ? 'block' : 'none';
+          q(`fbc-bloquePruebas${suf}`).style.display = val === 'pendiente_pruebas' ? 'block' : 'none';
+        });
+
+        const waNoLocChk = q(`fbc-waNoLoc${suf}`);
+        waNoLocChk.addEventListener('change', () => {
+          q(`fbc-bloqueWaNumNoLoc${suf}`).style.display = waNoLocChk.checked ? 'block' : 'none';
+        });
+
+        const citarNoLocChk = q(`fbc-citarNoLoc${suf}`);
+        citarNoLocChk.addEventListener('change', () => {
+          q(`fbc-bloqueCitaNoLoc${suf}`).style.display = citarNoLocChk.checked ? 'block' : 'none';
+        });
+
+        const canalPruebasSel = q(`fbc-canalPruebas${suf}`);
+        canalPruebasSel.addEventListener('change', () => {
+          const val = canalPruebasSel.value;
+          q(`fbc-bloqueCitaPruebas${suf}`).style.display = val === 'cita' ? 'block' : 'none';
+          q(`fbc-bloqueWaPruebas${suf}`).style.display = val === 'whatsapp' ? 'block' : 'none';
+        });
+
+        const citarProvChk = q(`fbc-citarProveedor${suf}`);
+        citarProvChk.addEventListener('change', () => {
+          q(`fbc-bloqueCitaProveedor${suf}`).style.display = citarProvChk.checked ? 'block' : 'none';
+        });
+
+        if (suf !== 'Nueva') {
+          const cbTicket = q(`fbc-cbTicket${suf}`);
+          cbTicket.addEventListener('change', () => {
+            q(`fbc-bloqueTicketProveedor${suf}`).style.display = cbTicket.checked ? 'block' : 'none';
+            if (!cbTicket.checked) q(`fbc-ticketProveedor${suf}`).value = '';
+          });
+        }
+
+        const citarAtcChk = q(`fbc-citarAtcInterno${suf}`);
+        citarAtcChk.addEventListener('change', () => {
+          q(`fbc-bloqueCitaAtcInterno${suf}`).style.display = citarAtcChk.checked ? 'block' : 'none';
+        });
+      }
+
+      conectarEstado('Nueva');
+      conectarEstado('Act');
+
+      // ── Helper: luzTexto ─────────────────────────────────────
+      function luzTexto(selId, colorId) {
+        const estado = q(selId).value;
+        if (estado === 'Apagado') return 'Apagado';
+        return `${estado} ${q(colorId).value}`;
+      }
+
+      // ── Helper: texto Community por formulario ────────────────
+      function buildTextoCommunity(tipo) {
+        const p = { 'incomunicado': 'fbc-inc', 'bajo-sincronismo': 'fbc-bs', 'no-navega-cable': 'fbc-nnc', 'cortes-ftth': 'fbc-cft', 'averia-wifi': 'fbc-aw' }[tipo];
+        const fijo = q(`${p}-fijo`).value.trim();
+        const horario = q(`${p}-horario`).value.trim();
+
+        const cabeceraComun =
+          `Nº OT: ${q(`${p}-ot`).value.trim()}
+Instalación YMO: ${q(`${p}-ymo`).value}${fijo ? `\nTeléfono fijo servicio: ${fijo}` : ''}
+Teléfono móvil de contacto: ${q(`${p}-movil`).value.trim()}
+Nombre de contacto: ${q(`${p}-nombre`).value.trim()}${horario ? `\nHorario de contacto para pruebas en domicilio: ${horario}` : ''}
+Información adicional: ${q(`${p}-info`).value.trim()}`;
+
+        switch (tipo) {
+          case 'incomunicado':
+            return `${cabeceraComun}
 
 Motivo avería: Incomunicado
 Luces router (según modelo)
-- PWR/POWER: ${pwr}
-- PON/DSL/WAN: ${pon}
-- LOS / ! : ${los}
-- INTERNET/@: ${internet}
+- PWR/POWER: ${q('fbc-inc-pwr').value}
+- PON/DSL/WAN: ${q('fbc-inc-pon').value}
+- LOS / ! : ${q('fbc-inc-los').value}
+- INTERNET/@: ${q('fbc-inc-internet').value}
 Descripcion del problema:
-Router enciende: ${router}
-Reinicio del router: ${reinicio}
-Reset de palillo: ${reset}
-Apagado de 15 min de router y ONT: ${apagado}
-Comprobacion de cableado: ${cableado}`;
+Router enciende: ${q('fbc-inc-router').value}
+Reinicio del router: ${q('fbc-inc-reinicio').value}
+Reset de palillo: ${q('fbc-inc-reset').value}
+Apagado de 15 min de router y ONT: ${q('fbc-inc-apagado').value}
+Comprobacion de cableado: ${q('fbc-inc-cableado').value.trim()}`;
 
-      // Copiar al portapapeles
-      navigator.clipboard.writeText(resultado).then(() => {
-        alert('📋 Resultado copiado al portapapeles (Community).');
-      }).catch(() => {
-        alert('⚠️ No se pudo copiar automáticamente. Copia manualmente el texto.');
+          case 'bajo-sincronismo': {
+            const idtest = q('fbc-bs-idtest').value.trim();
+            return `${cabeceraComun}
+
+Motivo avería: Bajo Sincronismo
+Test de velocidad:${idtest ? `\n- Id test: ${idtest}` : ''}
+Luces router (según modelo)
+- PON/DSL/WAN: ${luzTexto('fbc-bs-pon', 'fbc-bs-pon-color')}
+- INTERNET/@: ${luzTexto('fbc-bs-internet', 'fbc-bs-internet-color')}
+- LAN: ${luzTexto('fbc-bs-lan', 'fbc-bs-lan-color')}
+Descripción del problema: ${q('fbc-bs-descripcion').value.trim()}
+Conexión realizada por: ${q('fbc-bs-conexion').value}`;
+          }
+
+          case 'no-navega-cable':
+            return `${cabeceraComun}
+
+Motivo avería: NO NAVEGA FTTH (no wifi)
+Luces router (según modelo)
+- PWR/POWER: ${luzTexto('fbc-nnc-pwr', 'fbc-nnc-pwr-color')}
+- PON/DSL/WAN: ${luzTexto('fbc-nnc-pon', 'fbc-nnc-pon-color')}
+- INTERNET/@: ${luzTexto('fbc-nnc-internet', 'fbc-nnc-internet-color')}
+- LAN: ${luzTexto('fbc-nnc-lan', 'fbc-nnc-lan-color')}
+Descripción del problema: ${q('fbc-nnc-descripcion').value.trim()}`;
+
+          case 'cortes-ftth':
+            return `${cabeceraComun}
+
+Motivo avería: CORTES FTTH
+Luces router (según modelo)
+- PON/DSL/WAN: ${luzTexto('fbc-cft-pon', 'fbc-cft-pon-color')}
+- INTERNET/@: ${luzTexto('fbc-cft-internet', 'fbc-cft-internet-color')}
+- LAN: ${luzTexto('fbc-cft-lan', 'fbc-cft-lan-color')}
+- WIFI/WLAN: ${luzTexto('fbc-cft-wifi', 'fbc-cft-wifi-color')}
+Descripción del problema: ${q('fbc-cft-descripcion').value.trim()}`;
+
+          case 'averia-wifi': {
+            const disp = q('fbc-aw-dispositivo').value.trim();
+            return `${cabeceraComun}
+
+Motivo avería: WIFI
+¿Cliente ha reiniciado el router de la corriente?: ${q('fbc-aw-reinicio').value}${disp ? `\nDispositivo de prueba: ${disp}` : ''}
+Fallos:
+- Lentitud: ${q('fbc-aw-lentitud').value}
+- Cortes: ${q('fbc-aw-cortes').value}
+- No conecta con: ${q('fbc-aw-banda').value}
+- Dispositivo IoT: ${q('fbc-aw-iot').value}
+- Conectado AP: ${q('fbc-aw-ap').value}
+Descripción del problema: ${q('fbc-aw-descripcion').value.trim()}`;
+          }
+        }
+      }
+
+      // ── Helper: texto Gossan Nueva ────────────────────────────
+      const PLANTILLA_LABEL = {
+        'incomunicado': 'Incomunicado',
+        'bajo-sincronismo': 'Bajo Sincronismo',
+        'no-navega-cable': 'NO NAVEGA FTTH (no wifi)',
+        'cortes-ftth': 'CORTES FTTH',
+        'averia-wifi': 'WIFI'
+      };
+
+      function buildTextoGossanNueva(proveedor, motivo, tipo, e, prioridad) {
+        const hija = q('fbc-nueva-hija').checked;
+        const madre = q('fbc-nueva-madre').value.trim();
+
+        const partes = [];
+        partes.push(`[Incidencia - ${PROVEEDOR_LABEL[proveedor]} - ${motivo}]`);
+        if (hija && madre) partes.push(`Hija de: ${madre}`);
+
+        if (proveedor === 'blanca') {
+          if (tipo === null) {
+            partes.push('Plantilla: Sin plantilla');
+          } else {
+            const p = { 'incomunicado': 'fbc-inc', 'bajo-sincronismo': 'fbc-bs', 'no-navega-cable': 'fbc-nnc', 'cortes-ftth': 'fbc-cft', 'averia-wifi': 'fbc-aw' }[tipo];
+            const fijo = q(`${p}-fijo`).value.trim();
+            const horario = q(`${p}-horario`).value.trim();
+            const info = q(`${p}-info`).value.trim();
+
+            partes.push(`Plantilla: ${PLANTILLA_LABEL[tipo]}`);
+            partes.push(`OT: ${q(`${p}-ot`).value.trim()}`);
+            partes.push(`Contacto: ${q(`${p}-nombre`).value.trim()} (${q(`${p}-movil`).value.trim()})`);
+            if (fijo) partes.push(`Tel. fijo: ${fijo}`);
+            if (horario) partes.push(`Horario: ${horario}`);
+            if (info) partes.push(`Info: ${info}`);
+
+            switch (tipo) {
+              case 'incomunicado':
+                partes.push(`Luces: PWR/POWER: ${q('fbc-inc-pwr').value}, PON/DSL/WAN: ${q('fbc-inc-pon').value}, LOS/!: ${q('fbc-inc-los').value}, INTERNET/@: ${q('fbc-inc-internet').value}`);
+                partes.push(`Router enciende: ${q('fbc-inc-router').value}`);
+                partes.push(`Reinicio router: ${q('fbc-inc-reinicio').value}`);
+                partes.push(`Reset palillo: ${q('fbc-inc-reset').value}`);
+                partes.push(`Apagado 15min: ${q('fbc-inc-apagado').value}`);
+                partes.push(`Cableado: ${q('fbc-inc-cableado').value.trim()}`);
+                break;
+              case 'bajo-sincronismo': {
+                const idtest = q('fbc-bs-idtest').value.trim();
+                if (idtest) partes.push(`Id test: ${idtest}`);
+                partes.push(`Luces: PON/DSL/WAN: ${luzTexto('fbc-bs-pon', 'fbc-bs-pon-color')}, INTERNET/@: ${luzTexto('fbc-bs-internet', 'fbc-bs-internet-color')}, LAN: ${luzTexto('fbc-bs-lan', 'fbc-bs-lan-color')}`);
+                partes.push(`Descripción: ${q('fbc-bs-descripcion').value.trim()}`);
+                partes.push(`Conexión: ${q('fbc-bs-conexion').value}`);
+                break;
+              }
+              case 'no-navega-cable':
+                partes.push(`Luces: PWR/POWER: ${luzTexto('fbc-nnc-pwr', 'fbc-nnc-pwr-color')}, PON/DSL/WAN: ${luzTexto('fbc-nnc-pon', 'fbc-nnc-pon-color')}, INTERNET/@: ${luzTexto('fbc-nnc-internet', 'fbc-nnc-internet-color')}, LAN: ${luzTexto('fbc-nnc-lan', 'fbc-nnc-lan-color')}`);
+                partes.push(`Descripción: ${q('fbc-nnc-descripcion').value.trim()}`);
+                break;
+              case 'cortes-ftth':
+                partes.push(`Luces: PON/DSL/WAN: ${luzTexto('fbc-cft-pon', 'fbc-cft-pon-color')}, INTERNET/@: ${luzTexto('fbc-cft-internet', 'fbc-cft-internet-color')}, LAN: ${luzTexto('fbc-cft-lan', 'fbc-cft-lan-color')}, WIFI/WLAN: ${luzTexto('fbc-cft-wifi', 'fbc-cft-wifi-color')}`);
+                partes.push(`Descripción: ${q('fbc-cft-descripcion').value.trim()}`);
+                break;
+              case 'averia-wifi': {
+                const disp = q('fbc-aw-dispositivo').value.trim();
+                partes.push(`Reinicio corriente: ${q('fbc-aw-reinicio').value}`);
+                if (disp) partes.push(`Dispositivo: ${disp}`);
+                partes.push(`Fallos: Lentitud: ${q('fbc-aw-lentitud').value}, Cortes: ${q('fbc-aw-cortes').value}, No conecta: ${q('fbc-aw-banda').value}, IoT: ${q('fbc-aw-iot').value}, AP: ${q('fbc-aw-ap').value}`);
+                partes.push(`Descripción: ${q('fbc-aw-descripcion').value.trim()}`);
+                break;
+              }
+            }
+          }
+        } else if (proveedor === 'verde' || proveedor === 'naranja') {
+          const desc = q('fbc-gen-descripcion').value.trim();
+          const niv = q('fbc-gen-niveles').value.trim();
+          const pru = q('fbc-gen-pruebas').value.trim();
+          if (desc) partes.push(`Descripción: ${desc}`);
+          if (niv) partes.push(`Niveles/Equipos: ${niv}`);
+          if (pru) partes.push(`Pruebas realizadas: ${pru}`);
+        } else if (proveedor === 'azul') {
+          const desc = q('fbc-gen2-descripcion').value.trim();
+          const pru = q('fbc-gen2-pruebas').value.trim();
+          if (desc) partes.push(`Descripción: ${desc}`);
+          if (pru) partes.push(`Pruebas realizadas: ${pru}`);
+        }
+
+        const infoAdicional = q('fbc-info-adicional-nueva').value.trim();
+        if (infoAdicional) partes.push(`Información adicional: ${infoAdicional}`);
+
+        if (e.est !== 'final') partes.push(`Prioridad: ${prioridad}`);
+        partes.push(`Estado: ${buildTextoEstado(e)}`);
+
+        if (q('fbc-cbContactoNueva').checked) {
+          partes.push(`Teléfono de contacto: ${q('fbc-telContactoNueva').value.trim()}`);
+        }
+
+        return partes.join('. ') + '.';
+      }
+
+      // ── Helper: feedback botón ────────────────────────────────
+      function feedbackBtn(btn, textoOriginal, colorOriginal) {
+        btn.style.background = '#28a745';
+        btn.textContent = '✅ Listo';
+        setTimeout(() => {
+          btn.style.background = colorOriginal;
+          btn.textContent = textoOriginal;
+        }, 1500);
+      }
+
+      // ── Helper: validar campos comunes ────────────────────────
+      function validarCamposComunes(p) {
+        if (!q(`${p}-ot`).value.trim()) { alert('⚠️ El Nº OT es obligatorio.'); return false; }
+        if (!q(`${p}-movil`).value.trim()) { alert('⚠️ El teléfono móvil es obligatorio.'); return false; }
+        if (!q(`${p}-nombre`).value.trim()) { alert('⚠️ El nombre de contacto es obligatorio.'); return false; }
+        return true;
+      }
+
+      // ── Selector tipo gestión ─────────────────────────────────
+      q('fbc-gestion').addEventListener('change', () => {
+        const val = q('fbc-gestion').value;
+        q('fbc-bloque-nueva').style.display = val === 'nueva' ? 'block' : 'none';
+        q('fbc-bloque-actualizacion').style.display = val === 'actualizacion' ? 'block' : 'none';
       });
 
-      // Opcional: también pegar en el CRM
-      pegarTexto(resultado);
-    });
-  }
-});
+      // ── Checkbox hija Nueva ───────────────────────────────────
+      q('fbc-nueva-hija').addEventListener('change', () => {
+        q('fbc-nueva-hija-bloque').style.display = q('fbc-nueva-hija').checked ? 'block' : 'none';
+      });
+
+      // ── Estructura de proveedor → contenido según proveedor ───
+      // Fibra Blanca tiene la caja de plantilla Community; Verde/Naranja el
+      // formulario genérico con Niveles/Equipos; Azul el mismo sin Niveles.
+      function ocultarTodoContenidoProveedor() {
+        q('fbc-bloque-tipologia').style.display = 'none';
+        q('fbc-bloque-generico-niveles').style.display = 'none';
+        q('fbc-bloque-generico-sinniveles').style.display = 'none';
+        q('fbc-bloque-info-adicional-nueva').style.display = 'none';
+        q('fbc-info-adicional-nueva').value = '';
+        q('fbc-selector').value = '';
+        ['incomunicado', 'bajo-sincronismo', 'no-navega-cable', 'cortes-ftth', 'averia-wifi'].forEach(id => {
+          q(`fbc-form-${id}`).style.display = 'none';
+        });
+      }
+
+      q('fbc-proveedor').addEventListener('change', () => {
+        const val = q('fbc-proveedor').value;
+        ocultarTodoContenidoProveedor();
+        if (val === 'blanca') {
+          q('fbc-bloque-tipologia').style.display = 'block';
+          q('fbc-bloque-info-adicional-nueva').style.display = 'block';
+          aplicarPlantillaPorDefecto();
+        } else if (val === 'verde' || val === 'naranja') {
+          q('fbc-bloque-generico-niveles').style.display = 'block';
+        } else if (val === 'azul') {
+          q('fbc-bloque-generico-sinniveles').style.display = 'block';
+        }
+      });
+
+      // ── Motivo (compartido) → preselecciona Plantilla en Fibra Blanca ──
+      function aplicarPlantillaPorDefecto() {
+        if (q('fbc-proveedor').value !== 'blanca') return;
+        const motivo = q('fbc-motivo').value;
+        const defecto = MOTIVO_PLANTILLA_DEFAULT[motivo];
+        if (defecto) {
+          q('fbc-selector').value = defecto;
+          q('fbc-selector').dispatchEvent(new Event('change'));
+        }
+      }
+      q('fbc-motivo').addEventListener('change', aplicarPlantillaPorDefecto);
+
+      // ── Selector Plantilla (Fibra Blanca) ──────────────────────
+      q('fbc-selector').addEventListener('change', () => {
+        const val = q('fbc-selector').value;
+        ['incomunicado', 'bajo-sincronismo', 'no-navega-cable', 'cortes-ftth', 'averia-wifi'].forEach(id => {
+          q(`fbc-form-${id}`).style.display = val === id ? 'block' : 'none';
+        });
+      });
+
+      // ── Inicializar luces ─────────────────────────────────────
+      function initLuces(prefijo, luces) {
+        luces.forEach(luz => {
+          const selId = `${prefijo}-${luz}`;
+          const wrapId = `${prefijo}-${luz}-color-wrap`;
+          const actualizar = () => {
+            q(wrapId).style.display = q(selId).value === 'Apagado' ? 'none' : 'block';
+          };
+          actualizar();
+          q(selId).addEventListener('change', actualizar);
+        });
+      }
+
+      initLuces('fbc-bs', ['pon', 'internet', 'lan']);
+      initLuces('fbc-nnc', ['pwr', 'pon', 'internet', 'lan']);
+      initLuces('fbc-cft', ['pon', 'internet', 'lan', 'wifi']);
+
+      // ── Validación de la Plantilla de Fibra Blanca ─────────────
+      // Devuelve: undefined = inválido (ya se ha alertado), null = "Sin
+      // plantilla" (válido, nada que rellenar/copiar), string = plantilla.
+      const FORM_PREFIX = { 'incomunicado': 'fbc-inc', 'bajo-sincronismo': 'fbc-bs', 'no-navega-cable': 'fbc-nnc', 'cortes-ftth': 'fbc-cft', 'averia-wifi': 'fbc-aw' };
+      const FORM_DESC_ID = { 'incomunicado': null, 'bajo-sincronismo': 'fbc-bs-descripcion', 'no-navega-cable': 'fbc-nnc-descripcion', 'cortes-ftth': 'fbc-cft-descripcion', 'averia-wifi': 'fbc-aw-descripcion' };
+
+      function validarPlantillaBlanca() {
+        const tipo = q('fbc-selector').value;
+        if (!tipo) { alert('⚠️ Selecciona la plantilla (o "Sin plantilla" si no aplica un ticket).'); return undefined; }
+        if (tipo === 'sin_plantilla') return null;
+        if (!validarCamposComunes(FORM_PREFIX[tipo])) return undefined;
+        const descId = FORM_DESC_ID[tipo];
+        if (descId && !q(descId).value.trim()) {
+          alert('⚠️ La descripción del problema es obligatoria.');
+          return undefined;
+        }
+        return tipo;
+      }
+
+      // ── Copiar Community — mismo mecanismo que ya existía, ahora
+      //    con un único botón compartido para cualquier plantilla ──
+      q('fbc-copiar-community').addEventListener('click', () => {
+        const tipo = validarPlantillaBlanca();
+        if (tipo === undefined) return;
+        if (tipo === null) { alert('⚠️ La plantilla es "Sin plantilla" — no hay nada que copiar a Community.'); return; }
+        const texto = buildTextoCommunity(tipo);
+        navigator.clipboard.writeText(texto).then(() => {
+          feedbackBtn(q('fbc-copiar-community'), '📋 Copiar Community', '#6c757d');
+        }).catch(() => {
+          alert('⚠️ No se pudo copiar automáticamente.');
+        });
+      });
+
+      // ── Casilla número de contacto (Nueva) ─────────────────────
+      q('fbc-cbContactoNueva').addEventListener('change', () => {
+        q('fbc-bloqueContactoNueva').style.display = q('fbc-cbContactoNueva').checked ? 'block' : 'none';
+        if (!q('fbc-cbContactoNueva').checked) q('fbc-telContactoNueva').value = '';
+      });
+
+      // ── Generar resultado (Nueva) ──────────────────────────────
+      q('fbc-btn-generar-nueva').addEventListener('click', () => {
+        const proveedor = q('fbc-proveedor').value;
+        if (!proveedor) return alert('⚠️ Selecciona el proveedor.');
+        const motivo = q('fbc-motivo').value;
+        if (!motivo) return alert('⚠️ Selecciona el motivo.');
+
+        let tipo = null;
+        if (proveedor === 'blanca') {
+          tipo = validarPlantillaBlanca();
+          if (tipo === undefined) return;
+        }
+
+        const e = leerEstado('Nueva');
+        const errorEstado = validarEstado(e);
+        if (errorEstado) return alert(errorEstado);
+        const prioridad = q('fbc-prioridad-nueva').value;
+        if (e.est !== 'final' && !prioridad) return alert('⚠️ Selecciona la prioridad.');
+
+        if (q('fbc-cbContactoNueva').checked && !q('fbc-telContactoNueva').value.trim())
+          return alert('⚠️ Indica el número de contacto o desmarca la opción.');
+
+        const texto = buildTextoGossanNueva(proveedor, motivo, tipo, e, prioridad);
+        pegarTexto(texto);
+        escribirEstadoYPrioridadGossan(e.est, e.est !== 'final' ? prioridad : null);
+        escribirCitaGossanSiAplica(e);
+        try { fvSetAsignacion(ASIGNACION_FIBRA_EXTERNA); } catch (err) { console.warn('[FIBRAEXTERNA] No se pudo marcar asignación:', err); }
+        feedbackBtn(q('fbc-btn-generar-nueva'), '📝 Generar resultado', '#007bff');
+      });
+
+      // ── Actualización: eventos ────────────────────────────────
+      q('fbc-act-hija').addEventListener('change', () => {
+        q('fbc-act-hija-bloque').style.display = q('fbc-act-hija').checked ? 'block' : 'none';
+      });
+
+      q('fbc-act-cb-info').addEventListener('change', () => {
+        q('fbc-act-info-bloque').style.display = q('fbc-act-cb-info').checked ? 'block' : 'none';
+        if (!q('fbc-act-cb-info').checked) q('fbc-act-info').value = '';
+      });
+
+      q('fbc-act-cb-prov').addEventListener('change', () => {
+        q('fbc-act-prov-bloque').style.display = q('fbc-act-cb-prov').checked ? 'block' : 'none';
+        if (!q('fbc-act-cb-prov').checked) q('fbc-act-prov').value = '';
+      });
+
+      q('fbc-act-cb-pruebas').addEventListener('change', () => {
+        q('fbc-act-pruebas-bloque').style.display = q('fbc-act-cb-pruebas').checked ? 'block' : 'none';
+        if (!q('fbc-act-cb-pruebas').checked) q('fbc-act-pruebas').value = '';
+      });
+
+      q('fbc-act-cambiar-prioridad').addEventListener('change', () => {
+        q('fbc-act-bloque-prioridad').style.display = q('fbc-act-cambiar-prioridad').checked ? 'block' : 'none';
+        if (!q('fbc-act-cambiar-prioridad').checked) q('fbc-act-prioridad').value = '';
+      });
+
+      q('fbc-act-cbContacto').addEventListener('change', () => {
+        q('fbc-act-bloqueContacto').style.display = q('fbc-act-cbContacto').checked ? 'block' : 'none';
+        if (!q('fbc-act-cbContacto').checked) q('fbc-act-telContacto').value = '';
+      });
+
+      // ── Actualización: Pegar Gossan ───────────────────────────
+      q('fbc-act-pegar').addEventListener('click', () => {
+        const e = leerEstado('Act');
+        const errorEstado = validarEstado(e);
+        if (errorEstado) return alert(errorEstado);
+        if (q('fbc-act-cambiar-prioridad').checked && !q('fbc-act-prioridad').value) {
+          return alert('⚠️ Selecciona la nueva prioridad o desmarca la opción.');
+        }
+        if (q('fbc-act-cbContacto').checked && !q('fbc-act-telContacto').value.trim())
+          return alert('⚠️ Indica el número de contacto o desmarca la opción.');
+
+        const hija = q('fbc-act-hija').checked;
+        const madre = q('fbc-act-madre').value.trim();
+
+        const partes = ['[Incidencia - Fibra Externa - Actualización]'];
+        if (hija && madre) partes.push(`Hija de: ${madre}`);
+        if (q('fbc-act-cb-info').checked && q('fbc-act-info').value.trim())
+          partes.push(`Info: ${q('fbc-act-info').value.trim()}`);
+        if (q('fbc-act-cb-prov').checked && q('fbc-act-prov').value.trim())
+          partes.push(`Actualización proveedor: ${q('fbc-act-prov').value.trim()}`);
+        if (q('fbc-act-cb-pruebas').checked && q('fbc-act-pruebas').value.trim())
+          partes.push(`Pruebas: ${q('fbc-act-pruebas').value.trim()}`);
+        if (q('fbc-act-cambiar-prioridad').checked && e.est !== 'final')
+          partes.push(`Prioridad: ${q('fbc-act-prioridad').value}`);
+        partes.push(`Estado: ${buildTextoEstado(e)}`);
+        if (q('fbc-act-cbContacto').checked) {
+          partes.push(`Teléfono de contacto: ${q('fbc-act-telContacto').value.trim()}`);
+        }
+
+        pegarTexto(partes.join('. ') + '.');
+        escribirEstadoYPrioridadGossan(e.est, q('fbc-act-cambiar-prioridad').checked ? q('fbc-act-prioridad').value : null);
+        escribirCitaGossanSiAplica(e);
+        // Sin asignación automática en Actualización (decisión: solo se marca en Nueva).
+        feedbackBtn(q('fbc-act-pegar'), '📝 Pegar Gossan', '#007bff');
+      });
+    }
+  });
 
 /**************************************************************************
  * 📺 FLUJO: INCIDENCIA SERVICIO (TELEVISIÓN)
@@ -4292,7 +6053,6 @@ Flujos.registrar({
     });
   }
 });
-
 /**************************************************************************
  * 📺 FLUJO: INCIDENCIA SERVICIO (ZAPI)
  **************************************************************************/
@@ -5305,7 +7065,7 @@ Flujos.registrar({
 
   } // ── fin render
 }); // ── fin Flujos.registrar
-  
+
 /**************************************************************************
 FORZAR RENDERIZADO
 **************************************************************************/
