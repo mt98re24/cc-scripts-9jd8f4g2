@@ -1,4 +1,4 @@
-// ==BOTON TELEGRAM - AVERIAS PRIORIDAD ALTA ==
+// ==BOTON TELEGRAM/ROCKET - AVERIAS / AT. CLIENTE PRIORIDAD ALTA ==
 
 (function () {
   'use strict';
@@ -28,7 +28,7 @@
     return '';
   }
 
-  // === ESCAPAR MARKDOWN (Telegram) ===
+  // === ESCAPAR MARKDOWN (Telegram MarkdownV2) ===
   const escMd = s => (s || '').replace(/[_*\[\]()~`>#+\-=|{}.!]/g, m => '\\' + m);
 
   // === LECTURA ROBUSTA DE DATOS ===
@@ -50,6 +50,7 @@
     // ASIGNADO (mantiene la lógica anterior)
     const tokenEls = Array.from(document.querySelectorAll('span.ui-selectcheckboxmenu-token-label'));
     const tokens = tokenEls.map(el => el.textContent.trim());
+    const asignadoRaw = tokens.join(' | '); // texto completo de todos los tokens asignados
     const asignado = tokens.find(t => /^(AVERIAS|AV)\b/i.test(stripDiacritics(t))) || '';
 
     // DIRECCIÓN (multilínea)
@@ -80,15 +81,20 @@
       if (nextTd) tel2 = firstPhoneNumber(nextTd.textContent);
     }
 
-    // ANCLA para el botón (ID suele ser estable)
+    // ANCLA para los botones (ID suele ser estable)
     const spanAsign = document.getElementById('viewAMIncidenciasRaiz:formIncidencia:divAsignaciones');
 
-    return { cliente, prioridad, asignado, direccion, tel1, tel2, spanAsign };
+    return { cliente, prioridad, asignado, asignadoRaw, direccion, tel1, tel2, spanAsign };
   }
 
-  // === CONDICIONES PARA MOSTRAR BOTÓN ===
-  const conditionsMet = ({ prioridad, asignado }) =>
-    /^ALTA$/i.test(prioridad) && /^(AVERIAS|AV)\b/i.test(stripDiacritics(asignado || ''));
+  // === CONDICIONES PARA MOSTRAR BOTONES ===
+  const isPrioridadAlta = prioridad => /^ALTA$/i.test(prioridad);
+
+  const telegramConditionsMet = ({ prioridad, asignado }) =>
+    isPrioridadAlta(prioridad) && /^(AVERIAS|AV)\b/i.test(stripDiacritics(asignado || ''));
+
+  const rocketConditionsMet = ({ prioridad, asignadoRaw }) =>
+    isPrioridadAlta(prioridad) && /AT\.?\s*CLIENTE/i.test(stripDiacritics(asignadoRaw || ''));
 
   // === CONSTRUIR MENSAJE TELEGRAM ===
   function buildTelegramMarkdown({ cliente, direccion, tel1, tel2, prioridad, asignado }) {
@@ -103,65 +109,100 @@
     return parts.join('\n');
   }
 
-  // === BOTÓN DE TELEGRAM ===
-  function ensureRightSideButton(spanAsign) {
+  // === CONSTRUIR MENSAJE ROCKET CHAT ===
+  function buildRocketMessage({ cliente }) {
+    // Rocket.Chat usa Markdown estándar: *negrita* (un solo asterisco)
+    return `*${cliente}* - Revisad incidencia en prioridad ALTA. Motivo: `;
+  }
+
+  // === COPIAR AL PORTAPAPELES (con fallback) ===
+  async function copyToClipboard(text) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      let copied = false;
+      try { copied = document.execCommand('copy'); } catch {}
+      ta.remove();
+      return copied;
+    }
+  }
+
+  function flashButton(btn, copied, baseColor) {
+    const old = btn.textContent;
+    btn.textContent = copied ? '¡Copiado!' : 'Copiar manualmente';
+    btn.style.background = copied ? '#10b981' : '#f59e0b';
+    setTimeout(() => { btn.textContent = old; btn.style.background = baseColor; }, 1500);
+  }
+
+  // === CREAR/REUTILIZAR UN BOTÓN GENÉRICO ===
+  function ensureButton(id, label, color, spanAsign, afterEl) {
     if (!spanAsign) return null;
     const td = spanAsign.closest('td') || spanAsign.parentElement;
     if (!td) return null;
 
-    let btn = document.getElementById('tg-inline-btn');
+    let btn = document.getElementById(id);
     if (!btn) {
       btn = document.createElement('button');
-      btn.id = 'tg-inline-btn';
+      btn.id = id;
       btn.type = 'button';
-      btn.textContent = 'Telegram';
-      btn.title = 'Copiar mensaje para Telegram';
+      btn.textContent = label;
       btn.style.cssText = `
         display:inline-block; margin-left:8px; padding:6px 10px; border-radius:999px; border:none;
-        background:#1f6feb; color:#fff; cursor:pointer; font:12px/1 system-ui; vertical-align:middle;
+        background:${color}; color:#fff; cursor:pointer; font:12px/1 system-ui; vertical-align:middle;
       `;
     } else {
-      if (btn.previousElementSibling !== spanAsign) btn.remove();
+      // si el elemento de referencia previo ya no es el correcto, lo recolocamos
+      if (btn.previousElementSibling !== afterEl) btn.remove();
     }
 
     if (!btn.isConnected) {
-      if (spanAsign.nextSibling) td.insertBefore(btn, spanAsign.nextSibling);
+      if (afterEl.nextSibling) td.insertBefore(btn, afterEl.nextSibling);
       else td.appendChild(btn);
     }
     return btn;
   }
 
-  // === EVALUACIÓN Y EVENTO DE COPIAR ===
+  // === EVALUACIÓN Y EVENTOS ===
   function evaluate() {
     const data = readData();
-    const ok = conditionsMet(data);
-    const btn = ensureRightSideButton(data.spanAsign);
-    if (!btn) return;
+    if (!data.spanAsign) return;
 
-    btn.style.display = ok ? '' : 'none';
-    btn.disabled = !ok;
+    // --- Botón Telegram (AVERIAS) ---
+    const tgOk = telegramConditionsMet(data);
+    const tgBtn = ensureButton('tg-inline-btn', 'Telegram', '#1f6feb', data.spanAsign, data.spanAsign);
+    if (tgBtn) {
+      tgBtn.style.display = tgOk ? '' : 'none';
+      tgBtn.disabled = !tgOk;
+      tgBtn.onclick = async () => {
+        const fresh = readData();
+        const md = buildTelegramMarkdown(fresh);
+        const copied = await copyToClipboard(md);
+        flashButton(tgBtn, copied, '#1f6feb');
+      };
+    }
 
-    btn.onclick = async () => {
-      const fresh = readData();
-      const md = buildTelegramMarkdown(fresh);
-
-      let copied = false;
-      try { await navigator.clipboard.writeText(md); copied = true; }
-      catch {
-        const ta = document.createElement('textarea');
-        ta.value = md;
-        ta.style.position = 'fixed';
-        ta.style.opacity = '0';
-        document.body.appendChild(ta);
-        ta.select();
-        try { copied = document.execCommand('copy'); } catch {}
-        ta.remove();
-      }
-      const old = btn.textContent;
-      btn.textContent = copied ? '¡Copiado!' : 'Copiar manualmente';
-      btn.style.background = copied ? '#10b981' : '#f59e0b';
-      setTimeout(() => { btn.textContent = old; btn.style.background = '#1f6feb'; }, 1500);
-    };
+    // --- Botón Rocket Chat (AT. CLIENTE) ---
+    // se coloca justo después del botón de Telegram para no pisarlo
+    const rocketAfterEl = tgBtn || data.spanAsign;
+    const rkOk = rocketConditionsMet(data);
+    const rkBtn = ensureButton('rocket-inline-btn', 'Copiar Rocket', '#F5455C', data.spanAsign, rocketAfterEl);
+    if (rkBtn) {
+      rkBtn.style.display = rkOk ? '' : 'none';
+      rkBtn.disabled = !rkOk;
+      rkBtn.onclick = async () => {
+        const fresh = readData();
+        const msg = buildRocketMessage(fresh);
+        const copied = await copyToClipboard(msg);
+        flashButton(rkBtn, copied, '#F5455C');
+      };
+    }
   }
 
   // === OBSERVADOR DE CAMBIOS (para páginas dinámicas) ===
@@ -176,4 +217,3 @@
   else
     startObserver();
 })();
-
