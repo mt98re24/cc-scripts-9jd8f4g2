@@ -109,10 +109,35 @@
     return parts.join('\n');
   }
 
+  // === EXTRAER SOLO EL CÓDIGO DE CLIENTE (sin el nombre) ===
+  function extractClienteCode(raw) {
+    const s = norm(raw);
+    if (!s) return '';
+    // Caso "CODIGO - Nombre Apellido"
+    const dashSplit = s.split(/\s+-\s+/);
+    if (dashSplit.length > 1) return dashSplit[0].trim();
+    // Si no hay separador " - ", coger el primer token si contiene un dígito (parece código)
+    const firstToken = s.split(/\s+/)[0];
+    if (/\d/.test(firstToken)) return firstToken;
+    // Fallback: devolver el texto completo tal cual
+    return s;
+  }
+
+  // === EXTRAER POBLACIÓN DESDE LA DIRECCIÓN ===
+  // Formato esperado en la 2ª línea del bloque de dirección: "30204 CARTAGENA (Murcia)"
+  function extractPoblacion(direccion) {
+    if (!direccion) return '';
+    const m = direccion.match(/\d{5}\s+([A-ZÀ-ÚÑ\s.'-]+?)\s*\(/i);
+    return m ? norm(m[1]) : '';
+  }
+
   // === CONSTRUIR MENSAJE ROCKET CHAT ===
-  function buildRocketMessage({ cliente }) {
+  function buildRocketMessage({ cliente, direccion }) {
+    const codigo = extractClienteCode(cliente);
+    const poblacion = extractPoblacion(direccion);
     // Rocket.Chat usa Markdown estándar: *negrita* (un solo asterisco)
-    return `*${cliente}* - Revisad incidencia en prioridad ALTA. Motivo: `;
+    const clientePart = poblacion ? `*${codigo}* (${poblacion})` : `*${codigo}*`;
+    return `${clientePart} - Revisad incidencia en prioridad ALTA. Motivo: `;
   }
 
   // === COPIAR AL PORTAPAPELES (con fallback) ===
