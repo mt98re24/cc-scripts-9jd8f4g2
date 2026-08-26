@@ -13,11 +13,10 @@
     console.log("[ATC ALERT] Script iniciado.");
 
     // ======================================================
-    // 🧭 1) Obtener las ASIGNACIONES (buscar “INC. AT CLIENTE”)
+    // 🧭 1) Obtener las ASIGNACIONES (buscar "INC. AT CLIENTE")
     // ======================================================
     function obtenerAsignaciones() {
         try {
-            // Buscar la celda cuyo texto es "A quien se la asigna"
             const celdaAsign = [...document.querySelectorAll("td")]
                 .find(td => td.textContent.trim() === "A quien se la asigna");
 
@@ -29,9 +28,7 @@
             const celdaValor = celdaAsign.nextElementSibling;
             if (!celdaValor) return [];
 
-            // Buscar los tokens del checkboxmenu
             const tokens = [...celdaValor.querySelectorAll(".ui-selectcheckboxmenu-token-label")];
-
             const asignaciones = tokens.map(t => t.textContent.trim());
 
             console.log("[ATC ALERT] Asignaciones detectadas:", asignaciones);
@@ -48,7 +45,6 @@
     // ======================================================
     function obtenerFechaCita() {
         try {
-            // Buscar la celda cuyo texto es "Cita"
             const celdaCita = [...document.querySelectorAll("td")]
                 .find(td => td.textContent.trim() === "Cita");
 
@@ -57,10 +53,7 @@
             const celdaValor = celdaCita.nextElementSibling;
             if (!celdaValor) return null;
 
-            // Buscar inputs dentro de la celda
             const inputs = [...celdaValor.querySelectorAll("input[type='text']")];
-
-            // Buscar fecha en formato dd/mm/yyyy
             const regexFecha = /^\d{2}\/\d{2}\/\d{4}$/;
 
             const fecha = inputs
@@ -73,6 +66,41 @@
         } catch (e) {
             console.error("[ATC ALERT] Error obteniendo fecha cita:", e);
             return null;
+        }
+    }
+
+    // ======================================================
+    // 📆 2b) Comprobar si la fecha de cita es futura (estrictamente posterior a hoy)
+    // ======================================================
+    function esFechaFutura(fechaStr) {
+        if (!fechaStr) return false;
+
+        try {
+            const [dia, mes, anio] = fechaStr.split("/").map(Number);
+            const fechaCita = new Date(anio, mes - 1, dia);
+
+            // Validar que la fecha parseada sea real (evita 99/99/9999, 31/02/2026, etc.)
+            const esValida =
+                fechaCita.getFullYear() === anio &&
+                fechaCita.getMonth() === mes - 1 &&
+                fechaCita.getDate() === dia;
+
+            if (!esValida) {
+                console.warn("[ATC ALERT] Fecha con formato correcto pero valor inválido:", fechaStr);
+                return false;
+            }
+
+            const hoy = new Date();
+            hoy.setHours(0, 0, 0, 0);
+            fechaCita.setHours(0, 0, 0, 0);
+
+            const esFutura = fechaCita.getTime() > hoy.getTime();
+            console.log("[ATC ALERT] ¿Fecha cita es futura?:", esFutura, "(hoy no cuenta)");
+            return esFutura;
+
+        } catch (e) {
+            console.error("[ATC ALERT] Error evaluando si la fecha es futura:", e);
+            return false;
         }
     }
 
@@ -148,10 +176,10 @@
     const fechaCita = obtenerFechaCita();
 
     const tieneAsignacionATC = asignaciones.includes("INC. AT CLIENTE");
-    const tieneFechaCita = !!fechaCita;
+    const tieneFechaCita = esFechaFutura(fechaCita); // ahora exige fecha futura (hoy no cuenta)
 
     console.log("[ATC ALERT] ¿Asignado a ATC?:", tieneAsignacionATC);
-    console.log("[ATC ALERT] ¿Tiene fecha cita?:", tieneFechaCita);
+    console.log("[ATC ALERT] ¿Tiene fecha cita futura?:", tieneFechaCita);
 
     if (tieneAsignacionATC && tieneFechaCita) {
         mostrarBannerATC();
